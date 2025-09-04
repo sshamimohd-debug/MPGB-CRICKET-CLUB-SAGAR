@@ -16,7 +16,9 @@ from datetime import datetime
 
 # -------------------- App Setup --------------------
 st.set_page_config(page_title="MPGB Cricket Club – SAGAR", layout="wide", page_icon="🏏")
-ADMIN_SCORER_PIN = st.secrets.get("SCORER_PIN", "4321")  # change in Cloud Secrets if needed
+ADMIN_SCORER_PIN = st.secrets["SCORER_PIN"]
+except Exception:
+    ADMIN_SCORER_PIN = "4321"  # default PIN agar secrets file nahi mile
 
 DATA_DIR = "data"; os.makedirs(DATA_DIR, exist_ok=True)
 LOGO_PATH = "RRB_LOGO_new.png"
