@@ -1,12 +1,12 @@
 # APP_enhanced.py
-# MPGB Cricket Scoring - Full feature with overs.ball notation and English commentary templates
-# All major features: mobile login, admin, paid members, photo upload, scoring pad, undo, lock, stats, graphs.
+# MPGB Cricket Scoring - Full final (ID download, paid-sync, logo, friendly UI, overs.ball & commentary)
+# सब comments हिन्दी में
 
 import streamlit as st
 import pandas as pd
 import json, os, uuid, io, random
 from datetime import datetime, timedelta
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
 
 # optional autorefresh
@@ -65,7 +65,8 @@ GENERIC_COMMENTS = [
 
 # ---------------- Helpers ----------------
 def load_json(path, default=None):
-    if default is None: default = {}
+    if default is None:
+        default = {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -135,7 +136,7 @@ def next_member_id():
 
 def save_member_photo(member_id, uploaded_file):
     try:
-        image = Image.open(uploaded_file)
+        image = Image.open(uploaded_file).convert("RGB")
         ext = uploaded_file.name.split(".")[-1].lower()
         if ext not in ["png", "jpg", "jpeg"]:
             ext = "png"
@@ -188,6 +189,33 @@ def is_mobile_paid(mobile):
         return False
     return m in paid["Mobile_No"].tolist()
 
+def sync_paid_with_registry():
+    """
+    Read Members_Paid.csv and update members.csv Paid='Y' where mobile matches.
+    Returns: dict {updated_count: int, unmatched: [mobiles]}
+    """
+    paid_df = read_paid_list()
+    mems = read_members()
+    if paid_df.empty:
+        return {"updated_count": 0, "unmatched": []}
+    paid_set = set(paid_df["Mobile_No"].tolist())
+    updated = 0
+    unmatched = []
+    # mark Paid=Y for matching registry members
+    for idx, row in mems.iterrows():
+        mob = normalize_mobile(row.get("Mobile", ""))
+        if mob and mob in paid_set:
+            if mems.at[idx, "Paid"] != "Y":
+                mems.at[idx, "Paid"] = "Y"
+                updated += 1
+    # find paid mobiles not in registry
+    reg_mobs = set(mems["Mobile"].apply(normalize_mobile).tolist())
+    for p in paid_set:
+        if p not in reg_mobs:
+            unmatched.append(p)
+    write_members(mems)
+    return {"updated_count": updated, "unmatched": unmatched}
+
 # ---------------- Match index helpers ----------------
 def load_matches_index():
     return load_json(MATCH_INDEX, {})
@@ -228,12 +256,8 @@ def init_match_state_full(mid, title, overs, teamA, teamB, venue=""):
     save_match_state(mid, state)
     return state
 
-# ---------------- Commentary helper ----------------
+# ---------------- Commentary helpers ----------------
 def format_over_ball(total_balls):
-    """
-    Convert total_balls (int) to cricket notation over.ball (e.g., 5.1)
-    Using convention: first ball -> 0.1
-    """
     if total_balls <= 0:
         return "0.0"
     over_num = (total_balls - 1) // 6
@@ -244,14 +268,12 @@ def pick_commentary(outcome, striker, bowler, extras=None):
     extras = extras or {}
     text = ""
     if outcome in ["0", "1", "2", "3", "4", "6"]:
-        # choose run template
-        tmpl = random.choice(RUN_TEMPLATES)
         if outcome == "4":
-            tmpl = "Cracked through the gap for FOUR!"
-        if outcome == "6":
-            tmpl = "That's a massive SIX! Over the ropes."
-        # incorporate runs number sometimes
-        text = tmpl
+            text = "Cracked through the gap for FOUR!"
+        elif outcome == "6":
+            text = "That's a massive SIX! Over the ropes."
+        else:
+            text = random.choice(RUN_TEMPLATES)
     elif outcome in ["W", "Wicket"]:
         text = random.choice(WICKET_TEMPLATES)
     elif outcome in ["WD", "Wide"]:
@@ -262,7 +284,6 @@ def pick_commentary(outcome, striker, bowler, extras=None):
         text = random.choice(EXTRA_TEMPLATES["BY"])
     else:
         text = random.choice(GENERIC_COMMENTS)
-    # add simple context
     return f"{striker} vs {bowler} — {text}"
 
 # ---------------- Scoring logic (with commentary) ----------------
@@ -274,7 +295,6 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     non_striker = state["batting"].get("non_striker", "")
     bowler = state["bowling"].get("current_bowler", "") or "Unknown"
 
-    # snapshot for undo
     entry = {
         "time": datetime.utcnow().isoformat(),
         "outcome": outcome,
@@ -293,7 +313,6 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     state["batsman_stats"].setdefault(non_striker, {"R": 0, "B": 0, "4": 0, "6": 0})
     state["bowler_stats"].setdefault(bowler, {"B": 0, "R": 0, "W": 0})
 
-    legal_ball = True
     if outcome in ["0", "1", "2", "3", "4", "6"]:
         runs = int(outcome)
         state["batsman_stats"][striker]["R"] += runs
@@ -334,7 +353,6 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         add = int(extras.get("runs", 1))
         state["bowler_stats"][bowler]["R"] += add
         sc["runs"] += add
-        legal_ball = False
 
     elif outcome in ["NB", "NoBall"]:
         offbat = int(extras.get("runs_off_bat", 0))
@@ -343,7 +361,6 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         sc["runs"] += add
         if offbat > 0:
             state["batsman_stats"][striker]["R"] += offbat
-        legal_ball = False
 
     elif outcome in ["BY", "LB", "Bye", "LegBye"]:
         add = int(extras.get("runs", 1))
@@ -362,11 +379,8 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     entry["post_score"] = sc.copy()
     state["balls_log"].append(entry)
 
-    # commentary: compute over.ball using total balls **after** increment (sc["balls"])
     notation = format_over_ball(sc.get("balls", 0))
-    # choose a sentence
     comment_line = pick_commentary(outcome if outcome else "0", striker, bowler, extras)
-    # prefix with notation
     comment_text = f"{notation} — {comment_line}"
     state["commentary"].append(comment_text)
 
@@ -421,19 +435,90 @@ def release_scorer_lock(state, mid, phone):
         return True
     return False
 
+# ---------------- ID card generation ----------------
+def generate_id_card_image(member):
+    """
+    member: dict with MemberID, Name, Mobile, Paid
+    returns bytes PNG
+    """
+    W, H = 600, 360
+    bg = Image.new("RGB", (W, H), color=(255, 255, 255))
+    draw = ImageDraw.Draw(bg)
+    # fonts: try to load default PIL fonts (if system has more fonts you can specify)
+    try:
+        font_bold = ImageFont.truetype("arial.ttf", 28)
+        font_med = ImageFont.truetype("arial.ttf", 20)
+        font_small = ImageFont.truetype("arial.ttf", 16)
+    except:
+        font_bold = ImageFont.load_default()
+        font_med = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+
+    # Logo left top (if exists)
+    if os.path.exists(LOGO_PATH):
+        try:
+            logo = Image.open(LOGO_PATH).convert("RGBA")
+            logo.thumbnail((100,100))
+            bg.paste(logo, (20, 20), logo if logo.mode == "RGBA" else None)
+        except:
+            pass
+
+    # Photo circle
+    photo = None
+    ppath = get_member_photo_path(member.get("MemberID"))
+    if ppath:
+        try:
+            photo = Image.open(ppath).convert("RGB")
+            photo.thumbnail((160,160))
+        except:
+            photo = None
+    # draw placeholders
+    draw.rectangle([150, 20, W-20, 120], outline=(200,200,200), width=1)
+
+    # place photo
+    if photo:
+        box = (30, 140, 190, 300)
+        # paste centered
+        ph = photo.resize((160,160))
+        bg.paste(ph, (30, 140))
+    else:
+        # placeholder circle
+        draw.ellipse([30,140,190,300], outline=(120,120,120), width=2)
+        draw.text((70,200), "No Photo", font=font_small, fill=(120,120,120))
+
+    # Text fields
+    x = 210
+    y = 140
+    draw.text((x, y), f"Member ID: {member.get('MemberID','-')}", font=font_med, fill=(0,0,0))
+    draw.text((x, y+30), f"Name: {member.get('Name','-')}", font=font_med, fill=(0,0,0))
+    draw.text((x, y+60), f"Mobile: {member.get('Mobile','-')}", font=font_med, fill=(0,0,0))
+    paid_text = "PAID" if str(member.get("Paid","N")).upper()=="Y" else "NOT PAID"
+    draw.text((x, y+90), f"Status: {paid_text}", font=font_med, fill=(0,0,0))
+
+    # footer
+    draw.text((20, H-30), "MPGB Cricket Club - Sagar", font=font_small, fill=(50,50,50))
+    draw.text((W-250, H-30), "(An official group of Madhya Pradesh Gramin Bank)", font=font_small, fill=(80,80,80))
+
+    bytes_io = io.BytesIO()
+    bg.save(bytes_io, format="PNG")
+    bytes_io.seek(0)
+    return bytes_io
+
 # ---------------- UI & Pages ----------------
-st.set_page_config(page_title="MPGB Scoring", layout="wide")
+st.set_page_config(page_title="MPGB Scoring - Sagar", layout="wide")
 st.markdown("""
 <style>
 .header { background: linear-gradient(90deg,#0b8457,#0b572c); color:#fff; padding:12px; border-radius:8px; margin-bottom:10px; }
 .ball-chip { padding:6px 10px; border-radius:999px; background:#f3f4f6; display:inline-block; margin-right:6px; }
-.member-card { background:#fff; padding:8px; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.06); }
-.small { font-size:13px; color:#eee; }
+.big-btn { padding:12px 18px; font-size:18px; border-radius:10px; }
+.small-muted { color:#666; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
 # -------- Sidebar: Mobile login & register (photo) --------
 st.sidebar.title("Login / Register")
+st.sidebar.markdown("**Welcome!** Login with your mobile number. If not registered, please register (photo optional).")
+
 mobile_input = st.sidebar.text_input("Login Mobile (10 digits)", value="", placeholder="e.g. 9876543210")
 if st.sidebar.button("Login with Mobile"):
     mnorm = normalize_mobile(mobile_input)
@@ -447,7 +532,7 @@ if st.sidebar.button("Login with Mobile"):
             st.sidebar.success(f"Logged in as {row['Name']} ({row['MemberID']})")
             st.rerun()
         else:
-            st.sidebar.info("Mobile not registered. Please register in the form below.")
+            st.sidebar.info("Mobile not registered. Please register below.")
 
 # immediate paid preview
 if mobile_input:
@@ -483,15 +568,16 @@ if st.sidebar.button("Logout") and st.session_state.get("MemberID"):
     st.sidebar.success("Logged out")
     st.rerun()
 
-# ---------------- Header ----------------
+# ---------------- Header with logo (safe) ----------------
 col1, col2 = st.columns([4,1])
 with col1:
-    st.markdown('<div class="header"><h2>MPGB Cricket Club — Live Scoring</h2></div>', unsafe_allow_html=True)
+    st.markdown('<div class="header"><h2>Welcome to MPGB Cricket Club - Sagar</h2><div class="small-muted">(An official group of Madhya Pradesh Gramin Bank)</div></div>', unsafe_allow_html=True)
 with col2:
     if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=80)
+        st.image(LOGO_PATH, width=90)
     else:
-        st.markdown("<div class='small'>MPGB</div>", unsafe_allow_html=True)
+        # optional fallback: try raw github url if you want; else text
+        st.markdown("<div class='small-muted'>MPGB</div>", unsafe_allow_html=True)
 
 # ---------------- Current member helper & roles ----------------
 def current_member():
@@ -515,7 +601,7 @@ def get_role_from_mobile(mobile):
         return "member"
     return "guest"
 
-# ---------------- Sidebar member card ----------------
+# ---------------- Sidebar member card + ID download ----------------
 mem = current_member()
 if mem:
     st.sidebar.markdown("### Member Card")
@@ -526,17 +612,44 @@ if mem:
     ppath = get_member_photo_path(mem.get("MemberID"))
     if ppath:
         st.sidebar.image(ppath, width=120)
+    # ID download button
+    id_bytes = generate_id_card_image(mem)
+    st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
+    # small edit options
+    if st.sidebar.button("Edit name/photo"):
+        with st.sidebar.form("edit_profile", clear_on_submit=False):
+            new_name = st.text_input("New name", value=mem.get("Name"))
+            new_photo = st.file_uploader("New photo", type=["jpg","jpeg","png"], key="edit_photo")
+            if st.form_submit_button("Save"):
+                mdf = read_members()
+                mdf.loc[mdf["MemberID"] == mem.get("MemberID"), "Name"] = new_name.strip()
+                write_members(mdf)
+                if new_photo:
+                    save_member_photo(mem.get("MemberID"), new_photo)
+                st.sidebar.success("Profile updated. Please logout & login to refresh.")
 else:
-    st.sidebar.info("Guest — login or register")
+    st.sidebar.info("Guest — login or register to get member features")
 
 # ---------------- Menu ----------------
 menu = st.sidebar.selectbox("Menu", ["Home","Match Setup","Live Scorer","Live Score (Public)","Player Stats","Admin"])
 
 # ---------------- Home ----------------
 if menu == "Home":
-    st.subheader("Welcome to MPGB Scoring")
-    st.write("Guest: view live score & stats. Paid members: create & score. Admin: manage paid list & members.")
-    st.info("Login with mobile (registered). Admin mobile is your assigned number only.")
+    st.subheader("Welcome to MPGB Cricket Club - Sagar")
+    st.markdown("**(An official group of Madhya Pradesh Gramin Bank)**")
+    st.write("""
+    - Guests can view live score and player stats.
+    - Paid members can create matches and score.
+    - Admin (only assigned mobile) can manage paid list and members.
+    """)
+    st.markdown("#### Quick links")
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Create Match"):
+        st.experimental_set_query_params(page="match_setup"); st.rerun()
+    if c2.button("Live Score"):
+        st.experimental_set_query_params(page="live_score"); st.rerun()
+    if c3.button("Register"):
+        st.experimental_set_query_params(page="register"); st.rerun()
 
 # ---------------- Match Setup ----------------
 if menu == "Match Setup":
@@ -583,7 +696,7 @@ if menu == "Match Setup":
 
     st.markdown("### Existing Matches")
     if matches:
-        for k, info in sorted(matches.items(), key=lambda x:x[0], reverse=True):
+        for k, info in sorted(matches.items(), key=lambda x: x[0], reverse=True):
             st.write(f"- **{info.get('title')}** ({k}) — Overs: {info.get('overs')} — Created: {info.get('created_at')}")
             if role == "admin":
                 if st.button(f"Delete {k}", key=f"del_{k}"):
@@ -644,16 +757,12 @@ if menu == "Live Scorer":
     opp_team = "Team B" if bat_team=="Team A" else "Team A"
     cols = st.columns(3)
     with cols[0]:
-        try:
-            idx0 = team_list.index(state["batting"].get("striker",""))
-        except:
-            idx0 = 0
+        try: idx0 = team_list.index(state["batting"].get("striker",""))
+        except: idx0 = 0
         striker = st.selectbox("Striker", options=team_list, index=idx0)
     with cols[1]:
-        try:
-            idx1 = team_list.index(state["batting"].get("non_striker",""))
-        except:
-            idx1 = 0
+        try: idx1 = team_list.index(state["batting"].get("non_striker",""))
+        except: idx1 = 0
         non_striker = st.selectbox("Non-Striker", options=team_list, index=idx1)
     with cols[2]:
         bowler = st.selectbox("Bowler", options=teams.get(opp_team, []))
@@ -686,8 +795,7 @@ if menu == "Live Scorer":
     mems_df = read_members()
     for e in state.get("balls_log", [])[-12:][::-1]:
         out = e.get("outcome"); s = e.get("striker"); b = e.get("bowler")
-        display = s
-        photo = None
+        display = s; photo = None
         if s and any(ch.isdigit() for ch in s):
             s_norm = normalize_mobile(s)
             row = mems_df[mems_df["Mobile"]==s_norm]
@@ -699,7 +807,6 @@ if menu == "Live Scorer":
             except: c1.write("")
         else:
             c1.write("")
-        # show commentary if exists match by time
         c2.write(f"**{display}** — {out} — {b}")
 
     st.markdown("### Commentary (recent)")
@@ -783,13 +890,10 @@ if menu == "Admin":
             df = df[df["Mobile_No"]!=""].drop_duplicates()
             write_paid_list(df)
             st.success("Paid list uploaded")
-            # sync registry Paid flag
-            mems = read_members()
-            mems["Mobile"] = mems["Mobile"].apply(normalize_mobile)
-            paidset = set(df["Mobile_No"].tolist())
-            mems["Paid"] = mems["Mobile"].apply(lambda x: "Y" if x in paidset else mems.get("Paid","N"))
-            write_members(mems)
-            st.info("Member registry Paid flag updated")
+            result = sync_paid_with_registry()
+            st.info(f"Registry updated: {result['updated_count']} members marked Paid.")
+            if result["unmatched"]:
+                st.warning(f"{len(result['unmatched'])} paid mobiles not found in registry. They are: {', '.join(result['unmatched'][:10])}")
         except Exception as e:
             st.error(f"Upload failed: {e}")
 
@@ -811,6 +915,13 @@ if menu == "Admin":
             df2 = dfp[dfp["Mobile_No"]!=del_m]; write_paid_list(df2); st.success("Deleted")
     else:
         st.info("Paid list empty")
+
+    st.markdown("### Sync Paid list with Registry")
+    if st.button("Sync paid list -> members.csv"):
+        res = sync_paid_with_registry()
+        st.success(f"Sync done. {res['updated_count']} registry members updated. {len(res['unmatched'])} unmatched mobiles.")
+        if res["unmatched"]:
+            st.warning("Unmatched examples: " + ", ".join(res["unmatched"][:10]))
 
     st.markdown("### Paid list preview (with registry match)")
     paid_df = read_paid_list(); mems = read_members()
