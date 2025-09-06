@@ -86,11 +86,11 @@ html, body, [class*="css"] {{ font-family: Inter, system-ui, -apple-system, Sego
 .chip-bye {{ background:#F1F5F9; }}
 
 /* pulse animation for latest chip */
-@keyframes pulse {
+@keyframes pulse {{
   0% {{ transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0.0); }}
   50% {{ transform: scale(1.12); box-shadow: 0 8px 18px rgba(0,0,0,0.08); }}
   100% {{ transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0.0); }}
-}
+}}
 .ball-chip.latest {{ animation: pulse 0.9s ease-in-out; }}
 
 /* Buttons */
