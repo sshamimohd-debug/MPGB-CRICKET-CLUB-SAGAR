@@ -1,286 +1,308 @@
 # APP_enhanced.py
-# MPGB Cricket Scoring - Enhanced (Updated)
-# Features: sidebar OTP login, paid members check, admin-only paid-list update, match setup by members, scoring pad, undo, scorer lock.
+# MPGB Cricket Scoring - Full Version with Registration, Paid Mgmt, Logo
+# Language: Hindi comments
 
 import streamlit as st
 import pandas as pd
-import json, os, uuid, time, hashlib, random
+import json, os, uuid
 from datetime import datetime, timedelta
 
-# optional autorefresh lib
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTORE = True
-except Exception:
+except:
     HAS_AUTORE = False
 
-# ----------------- CONFIG -----------------
+# ---------------- CONFIG ----------------
 DATA_DIR = "data"
+MEMBERS_CSV = os.path.join(DATA_DIR, "members.csv")     # Member registry
+PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")  # Paid-only list
 MATCH_INDEX = os.path.join(DATA_DIR, "matches_index.json")
-PAID_XLSX = os.path.join(DATA_DIR, "Members_Paid.xlsx")  # optional
-PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")    # preferred for cloud
-OTP_STORE = os.path.join(DATA_DIR, "otp_store.json")
-PAY_REQS = os.path.join(DATA_DIR, "payment_requests.json")
-ADMIN_PHONE = "8931883300"   # admin mobile (last 10 digits)
-# ensure data dir
+ADMIN_PHONE = "8931883300"   # सिर्फ यही mobile admin allowed
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ----------------- UTIL: JSON read/write -----------------
+# ---------------- Helpers ----------------
 def load_json(path, default=None):
-    if default is None:
-        default = {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
+    if default is None: default = {}
+    try: return json.load(open(path,"r",encoding="utf-8"))
+    except: return default
 
 def save_json(path, obj):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
-    try:
-        os.replace(tmp, path)
-    except Exception:
-        os.rename(tmp, path)
+    tmp = path+".tmp"
+    with open(tmp,"w",encoding="utf-8") as f: json.dump(obj,f,indent=2,ensure_ascii=False)
+    try: os.replace(tmp,path)
+    except: os.rename(tmp,path)
 
-# ----------------- Mobile normalization & paid-members helpers -----------------
 def normalize_mobile(s):
-    if pd.isna(s) or s is None:
-        return ""
+    if pd.isna(s) or s is None: return ""
     s = str(s).strip()
-    for ch in [" ", "+", "-", "(", ")"]:
-        s = s.replace(ch, "")
-    digits = "".join([c for c in s if c.isdigit()])
-    if len(digits) > 10:
-        digits = digits[-10:]
+    for ch in [" ","+","-","(",")"]: s=s.replace(ch,"")
+    digits="".join([c for c in s if c.isdigit()])
+    if len(digits)>10: digits=digits[-10:]
     return digits
 
-def read_paid_members():
-    """
-    Returns DataFrame with column Mobile_No (normalized last 10 digits).
-    Looks for CSV first (preferred), else XLSX.
-    """
-    if os.path.exists(PAID_CSV):
-        try:
-            df = pd.read_csv(PAID_CSV, dtype=str)
-        except Exception:
-            df = pd.DataFrame(columns=["Mobile_No"])
-    elif os.path.exists(PAID_XLSX):
-        try:
-            df = pd.read_excel(PAID_XLSX, engine="openpyxl", dtype=str)
-        except Exception:
-            df = pd.DataFrame(columns=["Mobile_No"])
-    else:
-        return pd.DataFrame(columns=["Mobile_No"])
+# ------------- Members registry -------------
+def ensure_members_file():
+    if not os.path.exists(MEMBERS_CSV):
+        pd.DataFrame(columns=["MemberID","Name","Mobile","Paid"]).to_csv(MEMBERS_CSV,index=False)
 
-    # detect column for mobile
-    col = None
-    for c in df.columns:
-        if "mob" in c.lower() or "phone" in c.lower() or "contact" in c.lower():
-            col = c; break
-    if col is None and len(df.columns) > 0:
-        col = df.columns[0]
-    df = df.rename(columns={col: "Mobile_No"})
-    df["Mobile_No"] = df["Mobile_No"].apply(normalize_mobile)
-    df = df[df["Mobile_No"] != ""].drop_duplicates(subset=["Mobile_No"]).reset_index(drop=True)
+def read_members():
+    ensure_members_file()
+    try: df=pd.read_csv(MEMBERS_CSV,dtype=str)
+    except: df=pd.DataFrame(columns=["MemberID","Name","Mobile","Paid"])
+    if "Mobile" in df: df["Mobile"]=df["Mobile"].apply(normalize_mobile)
+    if "Paid" not in df: df["Paid"]="N"
+    return df.fillna("")
+
+def write_members(df): df.to_csv(MEMBERS_CSV,index=False)
+
+def next_member_id():
+    df=read_members()
+    if df.empty: return "M001"
+    ids=df["MemberID"].dropna().tolist(); nums=[]
+    for i in ids:
+        try: nums.append(int(i.lstrip("M")))
+        except: pass
+    mx=max(nums) if nums else 0
+    return f"M{(mx+1):03d}"
+
+# ------------- Paid-members helpers -------------
+def read_paid_list():
+    if os.path.exists(PAID_CSV):
+        try: df=pd.read_csv(PAID_CSV,dtype=str)
+        except: df=pd.DataFrame(columns=["Mobile_No"])
+    else: df=pd.DataFrame(columns=["Mobile_No"])
+    if df.shape[0]>0:
+        col=df.columns[0]; df=df.rename(columns={col:"Mobile_No"})
+        df["Mobile_No"]=df["Mobile_No"].apply(normalize_mobile)
+        df=df[df["Mobile_No"]!=""].drop_duplicates().reset_index(drop=True)
     return df
 
-def write_paid_members(df):
+def write_paid_list(df):
+    if "Mobile_No" not in df: df.columns=["Mobile_No"]
+    df["Mobile_No"]=df["Mobile_No"].apply(normalize_mobile)
+    df.to_csv(PAID_CSV,index=False)
+
+# ------------- Roles -------------
+def is_logged_in(): return bool(st.session_state.get("MemberID"))
+def current_member():
+    mid=st.session_state.get("MemberID",""); df=read_members()
+    row=df[df["MemberID"]==mid]; return row.iloc[0].to_dict() if not row.empty else None
+def is_member_paid(): mem=current_member(); return mem and mem.get("Paid")=="Y"
+def is_admin(): mem=current_member(); return mem and normalize_mobile(mem.get("Mobile"))==normalize_mobile(ADMIN_PHONE)
+# ---------------- Part-2: Matches, Scoring, Undo, Lock ----------------
+# Note: paste this code after Part-1 content in same APP_enhanced.py
+
+# ---------- Match index helpers ----------
+def load_matches_index():
+    return load_json(MATCH_INDEX, {})
+
+def save_matches_index(idx):
+    save_json(MATCH_INDEX, idx)
+
+# ---------- Initialize new match (helper already used in Part-1) ----------
+# init_match_state(mid,title,overs,teamA,teamB) defined earlier in short versions.
+# We'll provide a more complete init that includes batting order names if names exist.
+
+def init_match_state_full(mid, title, overs, teamA, teamB):
     """
-    Save paid list as CSV (more reliable on cloud).
-    df must have Mobile_No column.
+    teamA/teamB: lists of player identifiers (mobile or names)
     """
-    try:
-        df2 = df.copy()
-        if "Mobile_No" not in df2.columns:
-            df2.columns = ["Mobile_No"]
-        df2["Mobile_No"] = df2["Mobile_No"].apply(normalize_mobile)
-        df2 = df2[df2["Mobile_No"]!=""].drop_duplicates(subset=["Mobile_No"])
-        df2.to_csv(PAID_CSV, index=False)
-    except Exception as e:
-        st.error(f"Failed to write paid-members file: {e}")
-
-# ----------------- Match state helpers -----------------
-def match_state_path(mid):
-    return os.path.join(DATA_DIR, f"match_{mid}_state.json")
-
-def save_match_state(mid, state):
-    save_json(match_state_path(mid), state)
-
-def load_match_state(mid):
-    return load_json(match_state_path(mid), {})
-
-def init_match_state(mid, title, overs, teamA, teamB):
+    # batting order: use teamA list as provided
     state = {
         "mid": mid,
         "title": title,
+        "venue": "",
         "overs_limit": int(overs),
-        "status": "INNINGS1",
+        "status": "INNINGS1",   # or 'INNINGS2' etc
         "innings": 1,
         "bat_team": "Team A",
         "teams": {"Team A": teamA, "Team B": teamB},
-        "score": {"Team A": {"runs":0,"wkts":0,"balls":0}, "Team B":{"runs":0,"wkts":0,"balls":0}},
-        "batting": {"striker": teamA[0] if len(teamA)>0 else "", "non_striker": teamA[1] if len(teamA)>1 else "", "order": teamA[:], "next_index": 2},
+        "score": {"Team A": {"runs":0,"wkts":0,"balls":0}, "Team B": {"runs":0,"wkts":0,"balls":0}},
+        "batting": {
+            "striker": teamA[0] if len(teamA)>0 else "",
+            "non_striker": teamA[1] if len(teamA)>1 else "",
+            "order": teamA[:],
+            "next_index": 2
+        },
         "bowling": {"current_bowler": "", "last_over_bowler": ""},
-        "batsman_stats": {},
-        "bowler_stats": {},
-        "balls_log": [],
+        "batsman_stats": {},   # each: {R,B,4,6,0s...}
+        "bowler_stats": {},    # each: {B,R,W}
+        "balls_log": [],       # list of ball objects for undo/audit
         "commentary": [],
+        "overs_detail": [],    # list of over summaries
         "man_of_match_override": "",
         "scorer_lock": {}
     }
     save_match_state(mid, state)
     return state
 
-# ----------------- OTP helpers -----------------
-def gen_otp():
-    return str(random.randint(100000, 999999))
-
-def store_otp(phone, otp):
-    d = load_json(OTP_STORE, {})
-    phn = normalize_mobile(phone)
-    d[phn] = {"hash": hashlib.sha256(otp.encode()).hexdigest(), "expires": time.time()+300}
-    save_json(OTP_STORE, d)
-
-def verify_otp(phone, otp):
-    d = load_json(OTP_STORE, {})
-    phn = normalize_mobile(phone)
-    rec = d.get(phn)
-    if not rec:
-        return False
-    if rec.get("expires",0) < time.time():
-        return False
-    return rec.get("hash") == hashlib.sha256(otp.encode()).hexdigest()
-
-# ----------------- Ball record + undo -----------------
-def record_ball_in_state(state, mid, outcome, **kw):
+# ---------- Ball record / apply logic (comprehensive) ----------
+def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     """
-    outcome: '0','1','2','3','4','6','Wicket','Wide','No-Ball','Bye','Leg Bye'
-    Stores snapshot for undo and updates state.
+    outcome: string like '0','1','2','3','4','6','W' for wicket, 'WD' wide, 'NB' no-ball, 'BY','LB' for byes/legbyes
+    extras: dict for extras details e.g. {'runs':1} or {'runs_off_bat_nb':2}
+    wicket_info: dict with details if needed (type, howout, fielder, new_batsman)
     """
+    if extras is None: extras = {}
     bat_team = state["bat_team"]
     sc = state["score"][bat_team]
     striker = state["batting"].get("striker","")
     non_striker = state["batting"].get("non_striker","")
     bowler = state["bowling"].get("current_bowler","") or "Unknown"
 
+    # snapshot for undo
     entry = {
         "time": datetime.utcnow().isoformat(),
+        "over_no": None,   # we can compute later
         "outcome": outcome,
+        "extras": extras,
+        "wicket": wicket_info,
         "striker": striker,
         "non_striker": non_striker,
         "bowler": bowler,
         "prev_score": sc.copy(),
         "prev_batsman": {striker: state["batsman_stats"].get(striker, {}).copy(),
                          non_striker: state["batsman_stats"].get(non_striker, {}).copy()},
-        "prev_bowler": {bowler: state["bowler_stats"].get(bowler, {}).copy()},
-        "meta": kw
+        "prev_bowler": {bowler: state["bowler_stats"].get(bowler, {}).copy()}
     }
 
-    # handle outcomes
+    # Helper to ensure batsman/bowler records exist
+    state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})
+    state["batsman_stats"].setdefault(non_striker, {"R":0,"B":0,"4":0,"6":0})
+    state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})
+
+    # apply different outcomes
+    legal_ball = True
     if outcome in ["0","1","2","3","4","6"]:
         runs = int(outcome)
-        b = state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})
-        b["R"] += runs; b["B"] += 1
-        if runs == 4: b["4"] = b.get("4",0) + 1
-        if runs == 6: b["6"] = b.get("6",0) + 1
-        bo = state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})
-        bo["B"] += 1; bo["R"] += runs
-        sc["runs"] += runs; sc["balls"] += 1
+        # batsman
+        state["batsman_stats"][striker]["R"] += runs
+        state["batsman_stats"][striker]["B"] += 1
+        if runs == 4: state["batsman_stats"][striker]["4"] += 1
+        if runs == 6: state["batsman_stats"][striker]["6"] += 1
+        # bowler
+        state["bowler_stats"][bowler]["B"] += 1
+        state["bowler_stats"][bowler]["R"] += runs
+        # team score
+        sc["runs"] += runs
+        sc["balls"] += 1
+        # strike change
         if runs % 2 == 1:
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
 
-    elif outcome == "Wicket":
-        state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})
+    elif outcome == "W" or outcome == "Wicket":
+        # wicket: legal ball
         state["batsman_stats"][striker]["B"] += 1
-        bo = state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})
-        bo["B"] += 1; bo["W"] += 1
-        sc["wkts"] += 1; sc["balls"] += 1
-        order = state["batting"].get("order", [])
+        state["bowler_stats"][bowler]["B"] += 1
+        state["bowler_stats"][bowler]["W"] += 1
+        sc["wkts"] += 1
+        sc["balls"] += 1
+        # new batsman if provided
         nxt = state["batting"].get("next_index", 0)
-        next_player = ""
-        while nxt < len(order):
-            candidate = order[nxt]; nxt += 1
-            if candidate not in [striker, non_striker]:
-                next_player = candidate
-                break
+        order = state["batting"].get("order", [])
+        next_player = None
+        # if wicket_info gives new_batsman use that, else pick from order
+        if wicket_info and wicket_info.get("new_batsman"):
+            next_player = wicket_info.get("new_batsman")
+        else:
+            while nxt < len(order):
+                cand = order[nxt]; nxt += 1
+                if cand not in [striker, non_striker]:
+                    next_player = cand
+                    break
         state["batting"]["next_index"] = nxt
         if next_player:
             state["batting"]["striker"] = next_player
             state["batsman_stats"].setdefault(next_player, {"R":0,"B":0,"4":0,"6":0})
-
-    elif outcome == "Wide":
-        add = int(kw.get("wide_runs", 1))
-        state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})["R"] += add
+    elif outcome == "WD" or outcome == "Wide":
+        # wides: add runs (extras.get('runs') or default 1), not legal ball
+        add = int(extras.get("runs",1))
+        state["bowler_stats"][bowler]["R"] += add
         sc["runs"] += add
-
-    elif outcome == "No-Ball":
-        runs_off = int(kw.get("runs_off_bat_nb", 0))
-        add = 1 + runs_off
-        state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})["R"] += add
-        if runs_off>0:
-            state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})["R"] += runs_off
+        legal_ball = False
+    elif outcome == "NB" or outcome == "No-Ball":
+        # no-ball: 1 extra + possible runs off bat
+        offbat = int(extras.get("runs_off_bat",0))
+        add = 1 + offbat
+        state["bowler_stats"][bowler]["R"] += add
         sc["runs"] += add
-
-    elif outcome in ["Bye","Leg Bye"]:
-        add = int(kw.get("runs", 1))
+        if offbat>0:
+            state["batsman_stats"][striker]["R"] += offbat
+        legal_ball = False
+    elif outcome in ["BY","LB","Bye","LegBye"]:
+        add = int(extras.get("runs",1))
         sc["runs"] += add
-        state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})["B"] += 1
-        state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})["B"] += 1
+        # count as legal ball: batsman B doesn't get runs, but ball counts
+        state["batsman_stats"][striker]["B"] += 1
+        state["bowler_stats"][bowler]["B"] += 1
         sc["balls"] += 1
         if add % 2 == 1:
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
     else:
-        state["batsman_stats"].setdefault(striker, {"R":0,"B":0,"4":0,"6":0})["B"] += 1
-        state["bowler_stats"].setdefault(bowler, {"B":0,"R":0,"W":0})["B"] += 1
+        # unknown: treat as 0 legal
+        state["batsman_stats"][striker]["B"] += 1
+        state["bowler_stats"][bowler]["B"] += 1
         sc["balls"] += 1
 
+    # compute over/ball index if needed (optional)
+    # append entry
     entry["post_score"] = sc.copy()
     state["balls_log"].append(entry)
+    # append commentary
     txt = f"{datetime.now().strftime('%H:%M:%S')} — {outcome} — {striker} vs {bowler}"
     state["commentary"].append(txt)
-    save_match_state(mid, state)
 
-def undo_last_ball(state, mid):
+    # Save
+    save_match_state(mid, state)
+    return entry
+
+# ---------- Undo last ball (comprehensive revert) ----------
+def undo_last_ball_full(state, mid):
     if not state.get("balls_log"):
         return False
     last = state["balls_log"].pop()
-    state["score"][state["bat_team"]] = last["prev_score"]
-    for p, vals in last["prev_batsman"].items():
+    # restore previous score snapshot (stored earlier)
+    state["score"][state["bat_team"]] = last.get("prev_score", state["score"][state["bat_team"]])
+    # restore batsman/bowler stats if prev snapshots exist
+    prev_bats = last.get("prev_batsman", {})
+    for p, vals in prev_bats.items():
         if vals == {}:
             state["batsman_stats"].pop(p, None)
         else:
             state["batsman_stats"][p] = vals
-    for p, vals in last["prev_bowler"].items():
+    prev_bowl = last.get("prev_bowler", {})
+    for p, vals in prev_bowl.items():
         if vals == {}:
             state["bowler_stats"].pop(p, None)
         else:
             state["bowler_stats"][p] = vals
+    # commentary revert
     if state.get("commentary"):
         state["commentary"].pop()
     save_match_state(mid, state)
     return True
 
-# ----------------- Scorer lock -----------------
-def try_acquire_lock(state, mid, phone):
+# ---------- Scorer lock helpers ----------
+def try_acquire_scorer_lock(state, mid, phone):
     lock = state.get("scorer_lock", {})
     now = datetime.utcnow()
     if not lock or not lock.get("locked_by"):
         state["scorer_lock"] = {"locked_by": phone, "locked_at": now.isoformat(), "expires_at": (now + timedelta(minutes=15)).isoformat()}
         save_match_state(mid, state)
         return True
+    # check expiry
     try:
-        expires = datetime.fromisoformat(lock.get("expires_at"))
-        if expires < now:
+        exp = datetime.fromisoformat(lock.get("expires_at"))
+        if exp < now:
             state["scorer_lock"] = {"locked_by": phone, "locked_at": now.isoformat(), "expires_at": (now + timedelta(minutes=15)).isoformat()}
             save_match_state(mid, state)
             return True
-    except Exception:
+    except:
         pass
     return False
 
-def release_lock(state, mid, phone):
+def release_scorer_lock(state, mid, phone):
     lock = state.get("scorer_lock", {})
     if lock.get("locked_by") == phone:
         state["scorer_lock"] = {}
@@ -288,381 +310,268 @@ def release_lock(state, mid, phone):
         return True
     return False
 
-# ----------------- Roles helpers -----------------
-def is_member():
-    paid = read_paid_members()
-    phone = st.session_state.get("verified_mobile","")
-    if not phone:
-        return False
-    ph = normalize_mobile(phone)
-    if ph == "": return False
-    return (paid["Mobile_No"] == ph).any()
-
-def is_admin():
-    phone = st.session_state.get("verified_mobile","")
-    ph = normalize_mobile(phone)
-    return ph == normalize_mobile(ADMIN_PHONE)
-
-# ----------------- UI Start -----------------
-st.set_page_config(page_title="MPGB Scoring", layout="wide")
-# CSS (simple mobile friendly)
-st.markdown("""
-<style>
-:root{ --accent:#0b8457; --muted:#f3f4f6; --card:#ffffff; --danger:#e02424; }
-.header { background: linear-gradient(90deg,#062c2a,#0b8457); color:#fff; padding:12px; border-radius:10px; margin-bottom:10px; }
-.score-pad { display:grid; grid-template-columns: repeat(3,1fr); gap:10px; }
-.score-btn { border-radius:10px; padding:14px; font-weight:700; font-size:18px; background:#fff; border: none; box-shadow:0 6px 12px rgba(0,0,0,0.06); cursor:pointer; }
-.ball-chip { padding:6px 10px; border-radius:999px; background:#f3f4f6; font-weight:700; margin-right:6px; display:inline-block; }
-.small { font-size:13px; color:#666; }
-</style>
-""", unsafe_allow_html=True)
-
-# Session init
-if "login_mobile" not in st.session_state:
-    st.session_state["login_mobile"] = ""
-if "verified_mobile" not in st.session_state:
-    st.session_state["verified_mobile"] = ""
-if "auth_ok" not in st.session_state:
-    st.session_state["auth_ok"] = False
-
-# Sidebar: persistent login form
-st.sidebar.title("Member Login")
-if not st.session_state.get("auth_ok", False):
-    mb = st.sidebar.text_input("Mobile number", value=st.session_state.get("login_mobile",""), key="sb_mob")
-    if st.sidebar.button("Request OTP", key="sb_req"):
-        if not mb.strip():
-            st.sidebar.error("Enter mobile first")
-        else:
-            st.session_state["login_mobile"] = mb.strip()
-            # Check paid list first (inform)
-            paid = read_paid_members()
-            user_norm = normalize_mobile(mb)
-            if not (paid["Mobile_No"] == user_norm).any():
-                st.sidebar.warning("You are not in paid list. Please pay Rs 500 or request admin verification.")
-            otp = gen_otp()
-            store_otp(mb, otp)
-            if st.secrets.get("TWILIO_SID", None):
-                # optional: sending SMS via Twilio if configured
-                try:
-                    from twilio.rest import Client
-                    client = Client(st.secrets["TWILIO_SID"], st.secrets["TWILIO_AUTH"])
-                    client.messages.create(body=f"Your MPGB OTP: {otp}", from_=st.secrets["TWILIO_FROM"], to=mb)
-                    st.sidebar.success("OTP sent via SMS (if configured).")
-                except Exception as e:
-                    st.sidebar.info(f"OTP (test): {otp} — SMS sending failed: {e}")
-            else:
-                st.sidebar.info(f"OTP (test): {otp}")
-    otp_val = st.sidebar.text_input("Enter OTP", key="sb_otp")
-    if st.sidebar.button("Verify OTP", key="sb_v"):
-        phone_norm = normalize_mobile(st.session_state.get("login_mobile",""))
-        if verify_otp(phone_norm, otp_val.strip()):
-            st.session_state["verified_mobile"] = phone_norm
-            st.session_state["auth_ok"] = True
-            st.sidebar.success("Login successful")
-        else:
-            st.sidebar.error("Invalid or expired OTP")
-else:
-    st.sidebar.markdown(f"**Logged in:** {st.session_state.get('verified_mobile')}")
-    if st.sidebar.button("Logout", key="sb_lo"):
-        st.session_state["verified_mobile"] = ""
-        st.session_state["auth_ok"] = False
-        st.sidebar.success("Logged out")
-
-# Top header
-col1, col2 = st.columns([4,1])
-with col1:
-    st.markdown('<div class="header"><h2 style="margin:4px 0">MPGB Cricket Club — Live Scoring</h2></div>', unsafe_allow_html=True)
-with col2:
-    if st.session_state.get("verified_mobile"):
-        st.markdown(f"<div class='small'>Logged: {st.session_state.get('verified_mobile')}</div>", unsafe_allow_html=True)
-    else:
-        st.markdown("<div class='small'>Not logged</div>", unsafe_allow_html=True)
-
-# Sidebar Menu
-page = st.sidebar.selectbox("Menu", ["Home", "Match Setup", "Live Scorer", "Live Score (Public)", "Player Stats", "Admin"])
-
-# ----------------- HOME -----------------
-if page == "Home":
-    st.subheader("Welcome to MPGB Scoring")
-    st.write("Use sidebar to login and navigate. Paid members can create matches, score, and view stats.")
-    st.info("For testing OTP will show on screen. To enable real SMS, add Twilio credentials to Streamlit Secrets.")
-
-# ----------------- MATCH SETUP (members+admin) -----------------
-if page == "Match Setup":
-    if not (is_member() or is_admin()):
-        st.info("Match creation available to paid members. Please login and complete membership.")
-        st.stop()
-
-    st.subheader("Create / Manage Matches")
-    matches = load_json(MATCH_INDEX, {})
-    paid_df = read_paid_members()
-    # prepare choices (show name-mobile if present)
-    member_choices = []
-    if not paid_df.empty:
-        member_choices = paid_df["Mobile_No"].astype(str).tolist()
-
-    with st.form("create_match", clear_on_submit=True):
-        title = st.text_input("Match Title (e.g., Team A vs Team B)")
+# ---------- Match creation UI helper (used in Part-3) ----------
+def create_match_flow_ui():
+    """
+    Returns: mid if created, else None
+    This helper can be used in Match Setup page to render form and create match full state.
+    """
+    st.markdown("### Create a new match")
+    matches = load_matches_index()
+    paid = read_paid_list()
+    member_choices = paid["Mobile_No"].tolist() if not paid.empty else []
+    with st.form("create_match_form", clear_on_submit=True):
+        title = st.text_input("Match title (e.g., Team A vs Team B)")
         venue = st.text_input("Venue (optional)")
         overs = st.number_input("Overs per innings", min_value=1, max_value=50, value=20)
-        st.markdown("**Team A** (select from paid members or type names)")
-        teamA_select = st.multiselect("Team A (select mobiles)", options=member_choices, default=[])
-        teamA_manual = st.text_area("Team A manual (one per line)")
-        st.markdown("**Team B**")
-        teamB_select = st.multiselect("Team B (select mobiles)", options=member_choices, default=[])
-        teamB_manual = st.text_area("Team B manual (one per line)")
+        st.markdown("Select players for Team A (from paid-members) or add manually (one per line)")
+        teamA_select = st.multiselect("Team A (select)", options=member_choices, default=[])
+        teamA_manual = st.text_area("Team A manual entries")
+        st.markdown("Select players for Team B (from paid-members) or add manually")
+        teamB_select = st.multiselect("Team B (select)", options=member_choices, default=[])
+        teamB_manual = st.text_area("Team B manual entries")
         create = st.form_submit_button("Create Match")
-
     if create:
         def parse_manual(txt):
             return [x.strip() for x in txt.splitlines() if x.strip()]
-        tA = list(teamA_select) + parse_manual(teamA_manual)
-        tB = list(teamB_select) + parse_manual(teamB_manual)
-        # dedupe & normalize mobiles if they look numeric
+        tA = [normalize_mobile(x) if any(ch.isdigit() for ch in x) else x for x in list(teamA_select) + parse_manual(teamA_manual)]
+        tB = [normalize_mobile(x) if any(ch.isdigit() for ch in x) else x for x in list(teamB_select) + parse_manual(teamB_manual)]
+        # dedupe preserving order
         def dedup(seq):
             out=[]; seen=set()
             for s in seq:
-                if s is None: continue
-                s2 = normalize_mobile(s) if any(ch.isdigit() for ch in s) else s.strip()
-                if s2 and s2 not in seen:
-                    out.append(s2); seen.add(s2)
+                if s and s not in seen:
+                    out.append(s); seen.add(s)
             return out
         tA = dedup(tA); tB = dedup(tB)
         dups = set(tA).intersection(set(tB))
         if dups:
             st.error(f"Duplicate players in both teams: {', '.join(dups)}")
-        elif not title or not tA or not tB:
-            st.error("Provide title and players for both teams.")
-        else:
-            mid = datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6].upper()
-            matches[mid] = {"title": title, "venue": venue, "overs": int(overs), "teamA": tA, "teamB": tB, "created_at": datetime.now().isoformat()}
-            save_json(MATCH_INDEX, matches)
-            init_match_state(mid, title, overs, tA, tB)
-            st.success(f"Match created: {title} (id: {mid})")
+            return None
+        if not title or not tA or not tB:
+            st.error("Title and at least one player per team required")
+            return None
+        mid = datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6].upper()
+        matches[mid] = {"title": title, "venue": venue, "overs": int(overs), "teamA": tA, "teamB": tB, "created_at": datetime.now().isoformat()}
+        save_matches_index(matches)
+        # initialize full match state
+        init_match_state_full(mid, title, overs, tA, tB)
+        st.success(f"Match created: {title} ({mid})")
+        return mid
+    return None
 
-    st.markdown("### Existing Matches")
-    if matches:
-        for mid, info in sorted(matches.items(), key=lambda x:x[0], reverse=True):
-            st.write(f"- **{info.get('title')}**  ({mid}) — Overs: {info.get('overs')}. Created: {info.get('created_at')}")
+# ---------- Utility: show match list helper ----------
+def show_matches_list_ui():
+    matches = load_matches_index()
+    if not matches:
+        st.info("No matches currently")
+        return
+    st.markdown("### Matches")
+    for mid, info in sorted(matches.items(), key=lambda x:x[0], reverse=True):
+        st.write(f"- **{info.get('title','')}**  ({mid}) — Overs: {info.get('overs')} — Created: {info.get('created_at')}")
+# ---------------- Part-3: UI Pages ----------------
+
+st.set_page_config(page_title="MPGB Scoring", layout="wide")
+
+# --- CSS for header and ball chips ---
+st.markdown("""
+<style>
+.header { background: linear-gradient(90deg,#0b8457,#0b572c); color:#fff; padding:12px; border-radius:8px; margin-bottom:10px; }
+.ball-chip { padding:6px 10px; border-radius:999px; background:#f3f4f6; display:inline-block; margin-right:6px; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- Sidebar: Login/Register ---
+st.sidebar.title("Member Login / Register")
+
+# Login form
+mid_in = st.sidebar.text_input("Member ID", key="login_mid")
+if st.sidebar.button("Login"):
+    df = read_members()
+    if mid_in.strip() in df["MemberID"].tolist():
+        st.session_state["MemberID"] = mid_in.strip()
+        st.experimental_rerun()
     else:
-        st.info("No matches created yet.")
+        st.sidebar.error("Invalid MemberID")
 
-# ----------------- LIVE SCORER (members+admin) -----------------
+# Register form
+with st.sidebar.expander("Register new member"):
+    name = st.text_input("Name", key="reg_name")
+    mob = st.text_input("Mobile", key="reg_mob")
+    if st.button("Register", key="reg_btn"):
+        if not name or not mob:
+            st.error("Fill both fields")
+        else:
+            mems = read_members()
+            nm = normalize_mobile(mob)
+            if nm in mems["Mobile"].tolist():
+                st.info("Mobile already registered")
+            else:
+                nid = next_member_id()
+                new = pd.DataFrame([{"MemberID": nid, "Name": name, "Mobile": nm, "Paid": "N"}])
+                write_members(pd.concat([mems, new], ignore_index=True))
+                st.session_state["MemberID"] = nid
+                st.success(f"Registered. ID: {nid}")
+                st.experimental_rerun()
+
+# Logout
+if is_logged_in() and st.sidebar.button("Logout"):
+    st.session_state.pop("MemberID")
+    st.experimental_rerun()
+
+# --- Header with logo ---
+col1, col2 = st.columns([4,1])
+with col1:
+    st.markdown('<div class="header"><h2>MPGB Cricket Club — Live Scoring</h2></div>', unsafe_allow_html=True)
+with col2:
+    logo = os.path.join(DATA_DIR, "logo.png")
+    if os.path.exists(logo): st.image(logo, width=80)
+    else: st.markdown("**MPGB**")
+
+# --- Menu ---
+page = st.sidebar.selectbox("Menu", ["Home","Match Setup","Live Scorer","Live Score (Public)","Player Stats","Admin"])
+
+# ---------------- HOME ----------------
+if page == "Home":
+    st.subheader("Welcome")
+    st.write("👥 Guests can view Live Score and Player Stats.\n\n"
+             "💳 Paid members can create matches and score.\n\n"
+             "🛠️ Admin (only mobile 8931883300) can manage paid members and matches.")
+
+# ---------------- Match Setup ----------------
+if page == "Match Setup":
+    if not (is_member_paid() or is_admin()):
+        st.warning("Only paid members can create matches")
+        st.stop()
+    mid = create_match_flow_ui()
+    show_matches_list_ui()
+
+# ---------------- Live Scorer ----------------
 if page == "Live Scorer":
-    if not (is_member() or is_admin()):
-        st.info("Live scoring available to paid members. Please login or pay membership first.")
+    if not (is_member_paid() or is_admin()):
+        st.warning("Only paid members can score")
         st.stop()
-
-    st.subheader("Scorer")
-    matches = load_json(MATCH_INDEX, {})
-    if not matches:
-        st.info("No matches found. Create match in Match Setup.")
-        st.stop()
-    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
+    matches = load_matches_index()
+    if not matches: st.info("No matches"); st.stop()
+    mid = st.selectbox("Select Match", list(matches.keys()),
+                       format_func=lambda x:f"{x} — {matches[x]['title']}")
     state = load_match_state(mid)
-    if not state:
-        st.error("Match state missing.")
-        st.stop()
 
-    st.markdown(f"**{matches[mid]['title']}**")
-    # lock logic
-    user_phone = st.session_state.get("verified_mobile","")
-    lock = state.get("scorer_lock", {})
-    if lock and lock.get("locked_by") and lock.get("locked_by") != user_phone:
+    st.markdown(f"### {matches[mid]['title']}")
+    sc = state["score"]
+    st.write(f"Team A: {sc['Team A']['runs']}/{sc['Team A']['wkts']}  |  Team B: {sc['Team B']['runs']}/{sc['Team B']['wkts']}")
+
+    # Lock system
+    phone = normalize_mobile(current_member().get("Mobile",""))
+    lock = state.get("scorer_lock",{})
+    if lock and lock.get("locked_by") and lock.get("locked_by")!=phone:
         st.warning(f"Scoring locked by {lock.get('locked_by')} until {lock.get('expires_at')}")
-        if st.button("Request lock"):
-            st.info("Lock request noted. Contact current scorer.")
         st.stop()
     else:
-        if not lock or not lock.get("locked_by"):
-            if st.button("Acquire scoring lock"):
-                ok = try_acquire_lock(state, mid, user_phone)
-                if ok:
-                    st.success("Lock acquired for 15 minutes.")
-                    state = load_match_state(mid)
-                else:
-                    st.error("Could not acquire lock.")
+        if not lock:
+            if st.button("Acquire Lock"): 
+                if try_acquire_scorer_lock(state, mid, phone): st.experimental_rerun()
         else:
-            st.info(f"You hold lock until {lock.get('expires_at')}")
-            c1, c2 = st.columns(2)
-            if c1.button("Extend lock"):
-                state["scorer_lock"]["expires_at"] = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-                save_match_state(mid, state)
-                st.success("Lock extended by 15 minutes.")
-            if c2.button("Release lock"):
-                if release_lock(state, mid, user_phone):
-                    st.success("Lock released.")
-                    state = load_match_state(mid)
-                    st.experimental_rerun()
+            st.info(f"You hold the lock until {lock['expires_at']}")
+            c1,c2 = st.columns(2)
+            if c1.button("Extend Lock"):
+                state["scorer_lock"]["expires_at"] = (datetime.utcnow()+timedelta(minutes=15)).isoformat()
+                save_match_state(mid,state); st.experimental_rerun()
+            if c2.button("Release Lock"):
+                release_scorer_lock(state, mid, phone); st.experimental_rerun()
 
-    # set striker/non-striker/bowler
-    st.write("Score:", f"Team A {state['score']['Team A']['runs']}/{state['score']['Team A']['wkts']} ({state['score']['Team A']['balls']} balls)",
-             "|", f"Team B {state['score']['Team B']['runs']}/{state['score']['Team B']['wkts']} ({state['score']['Team B']['balls']} balls)")
-    col_s = st.columns(3)
-    bat_team = state.get("bat_team","Team A")
-    teams = state.get("teams", {})
-    team_list = teams.get(bat_team, [])
-    striker_idx = 0
-    if state["batting"].get("striker") in team_list:
-        striker_idx = team_list.index(state["batting"].get("striker"))
-    non_idx = 1 if len(team_list) > 1 else 0
-    if state["batting"].get("non_striker") in team_list:
-        non_idx = team_list.index(state["batting"].get("non_striker"))
-    with col_s[0]:
-        sel_striker = st.selectbox("Striker", options=team_list, index=striker_idx)
-    with col_s[1]:
-        sel_non = st.selectbox("Non-Striker", options=team_list, index=non_idx)
-    with col_s[2]:
-        opp_team = "Team B" if bat_team=="Team A" else "Team A"
-        sel_bowler = st.selectbox("Bowler", options=teams.get(opp_team, []), index=0 if teams.get(opp_team) else 0)
+    # Player set
+    bat_team = state["bat_team"]; teams = state["teams"]
+    cols = st.columns(3)
+    with cols[0]:
+        sel_str = st.selectbox("Striker", teams.get(bat_team,[]))
+    with cols[1]:
+        sel_non = st.selectbox("Non-Striker", teams.get(bat_team,[]))
+    with cols[2]:
+        opp = "Team B" if bat_team=="Team A" else "Team A"
+        sel_bowl = st.selectbox("Bowler", teams.get(opp,[]))
+    if st.button("Set Players"):
+        state["batting"]["striker"]=sel_str; state["batting"]["non_striker"]=sel_non
+        state["bowling"]["current_bowler"]=sel_bowl
+        save_match_state(mid,state); st.experimental_rerun()
 
-    if st.button("Set players for over"):
-        state["batting"]["striker"] = sel_striker
-        state["batting"]["non_striker"] = sel_non
-        state["bowling"]["current_bowler"] = sel_bowler
-        save_match_state(mid, state)
-        st.success("Players set.")
-
-    # scoring pad
+    # Scoring pad
     st.markdown("### Scoring Pad")
-    r1 = st.columns(3)
-    if r1[0].button("0"): record_ball_in_state(state, mid, "0"); st.experimental_rerun()
-    if r1[1].button("1"): record_ball_in_state(state, mid, "1"); st.experimental_rerun()
-    if r1[2].button("2"): record_ball_in_state(state, mid, "2"); st.experimental_rerun()
+    for row in [["0","1","2"],["3","4","6"],["W","WD","NB"],["BY","LB"]]:
+        cols = st.columns(len(row))
+        for i,val in enumerate(row):
+            if cols[i].button(val, key=f"btn_{val}"):
+                record_ball_full(state, mid, val)
+                st.experimental_rerun()
+    if st.button("Undo Last"):
+        undo_last_ball_full(state, mid); st.experimental_rerun()
 
-    r2 = st.columns(3)
-    if r2[0].button("3"): record_ball_in_state(state, mid, "3"); st.experimental_rerun()
-    if r2[1].button("4"): record_ball_in_state(state, mid, "4"); st.experimental_rerun()
-    if r2[2].button("6"): record_ball_in_state(state, mid, "6"); st.experimental_rerun()
-
-    r3 = st.columns(3)
-    if r3[0].button("Wicket"): record_ball_in_state(state, mid, "Wicket"); st.experimental_rerun()
-    if r3[1].button("Wide"): record_ball_in_state(state, mid, "Wide", wide_runs=1); st.experimental_rerun()
-    if r3[2].button("No-Ball"): record_ball_in_state(state, mid, "No-Ball", runs_off_bat_nb=0); st.experimental_rerun()
-
-    if st.button("Undo last ball"):
-        ok = undo_last_ball(state, mid)
-        if ok:
-            st.success("Last ball undone.")
-            st.experimental_rerun()
-        else:
-            st.warning("No ball to undo.")
-
-    # recent balls
-    logs = state.get("balls_log", [])[-12:]
-    if logs:
-        st.markdown("Recent balls:")
-        for lb in reversed(logs):
-            out = lb.get("outcome")
-            st.write(f"- {lb.get('time')} — {out} — {lb.get('striker')} vs {lb.get('bowler')}")
-
-# ----------------- LIVE SCORE (public) -----------------
-if page == "Live Score (Public)":
-    st.subheader("Live Score (Public)")
-    matches = load_json(MATCH_INDEX, {})
-    if not matches:
-        st.info("No matches.")
-        st.stop()
-    mid = st.selectbox("Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
-    state = load_match_state(mid)
-    if not state:
-        st.error("Match state missing.")
-        st.stop()
-    if HAS_AUTORE:
-        st_autorefresh(interval=2000, key=f"autoref_{mid}")
-    else:
-        if st.button("Refresh"):
-            st.experimental_rerun()
-    st.markdown(f"## {matches[mid]['title']}")
-    st.markdown(f"**{state['bat_team']}**: {state['score'][state['bat_team']]['runs']}/{state['score'][state['bat_team']]['wkts']} ({state['score'][state['bat_team']]['balls']} balls)")
-    chips = state.get("balls_log", [])[-12:]
-    if chips:
-        for e in reversed(chips):
-            st.markdown(f"<span class='ball-chip'>{e.get('outcome')}</span>", unsafe_allow_html=True)
-    st.markdown("### Commentary")
-    for c in state.get("commentary", [])[-30:]:
+    # Commentary
+    st.markdown("### Recent Commentary")
+    for c in state.get("commentary",[])[-10:][::-1]:
         st.write(c)
 
-# ----------------- PLAYER STATS -----------------
+# ---------------- Live Score (Public) ----------------
+if page == "Live Score (Public)":
+    matches = load_matches_index()
+    if not matches: st.info("No matches"); st.stop()
+    mid = st.selectbox("Match", list(matches.keys()),
+                       format_func=lambda x:f"{x} — {matches[x]['title']}")
+    state = load_match_state(mid)
+    if HAS_AUTORE: st_autorefresh(interval=3000, key=f"ref_{mid}")
+    st.markdown(f"## {matches[mid]['title']}")
+    bat = state.get("bat_team","Team A")
+    sc = state["score"][bat]
+    st.write(f"{bat}: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
+    chips = state.get("balls_log",[])[-12:]
+    for e in reversed(chips):
+        st.markdown(f"<span class='ball-chip'>{e['outcome']}</span>", unsafe_allow_html=True)
+
+# ---------------- Player Stats ----------------
 if page == "Player Stats":
-    st.subheader("Player Stats Aggregated")
-    matches = load_json(MATCH_INDEX, {})
-    if not matches:
-        st.info("No matches yet.")
-        st.stop()
-    pstats = {}
-    for mid in matches.keys():
+    st.subheader("Player Statistics (all matches)")
+    matches = load_matches_index()
+    stats = {}
+    for mid in matches:
         s = load_match_state(mid)
-        for name, vals in s.get("batsman_stats", {}).items():
-            rec = pstats.setdefault(name, {"R":0,"B":0,"4":0,"6":0,"M":0})
-            rec["R"] += vals.get("R",0); rec["B"] += vals.get("B",0); rec["4"] += vals.get("4",0); rec["6"] += vals.get("6",0)
-            rec["M"] += 1
-    if not pstats:
-        st.info("No player data.")
+        for name, vals in s.get("batsman_stats",{}).items():
+            rec = stats.setdefault(name, {"R":0,"B":0,"4":0,"6":0})
+            rec["R"]+=vals.get("R",0); rec["B"]+=vals.get("B",0)
+            rec["4"]+=vals.get("4",0); rec["6"]+=vals.get("6",0)
+    if not stats: st.info("No stats yet")
     else:
-        df = pd.DataFrame.from_dict(pstats, orient="index")
-        df["SR"] = (df["R"] / df["B"].replace(0,1)) * 100
-        st.dataframe(df.sort_values("R", ascending=False).reset_index().rename(columns={"index":"Player"}))
+        df = pd.DataFrame.from_dict(stats, orient="index").reset_index().rename(columns={"index":"Player"})
+        df["SR"] = (df["R"]/df["B"].replace(0,1))*100
+        st.dataframe(df.sort_values("R",ascending=False))
 
-# ----------------- ADMIN -----------------
+# ---------------- Admin ----------------
 if page == "Admin":
-    # admin login required
-    if not st.session_state.get("auth_ok", False) or not is_admin():
-        st.warning("Admin features available only to admin mobile.")
-        st.stop()
-
+    if not is_admin():
+        st.warning("Admin only"); st.stop()
     st.subheader("Admin Panel")
-    st.markdown("### Update Paid Members (Upload CSV/XLSX)")
-    uploaded = st.file_uploader("Upload Members CSV/XLSX (one column containing mobile numbers or 'Mobile_No' header)", type=["csv","xlsx"])
-    if uploaded is not None:
-        try:
-            if uploaded.name.endswith(".csv"):
-                dfnew = pd.read_csv(uploaded, dtype=str)
-            else:
-                dfnew = pd.read_excel(uploaded, engine="openpyxl", dtype=str)
-            if "Mobile_No" not in dfnew.columns:
-                # assume first column
-                col = dfnew.columns[0]
-                dfnew = dfnew.rename(columns={col: "Mobile_No"})
-            dfnew["Mobile_No"] = dfnew["Mobile_No"].apply(normalize_mobile)
-            dfnew = dfnew[dfnew["Mobile_No"]!=""].drop_duplicates(subset=["Mobile_No"])
-            write_paid_members(dfnew)
-            st.success("Paid members list updated.")
-        except Exception as e:
-            st.error(f"Upload failed: {e}")
 
-    st.markdown("### Pending Payment Requests")
-    reqs = load_json(PAY_REQS, {})
-    if reqs:
-        for m, info in list(reqs.items()):
-            st.write(f"- {m} requested at {info.get('requested_at')}")
-            c1, c2 = st.columns(2)
-            if c1.button(f"Approve {m}", key=f"ap_{m}"):
-                df = read_paid_members()
-                df = pd.concat([df, pd.DataFrame({"Mobile_No":[m]})], ignore_index=True)
-                df.drop_duplicates(subset=["Mobile_No"], keep="last", inplace=True)
-                write_paid_members(df)
-                reqs.pop(m, None); save_json(PAY_REQS, reqs)
-                st.success(f"{m} approved.")
-            if c2.button(f"Reject {m}", key=f"rj_{m}"):
-                reqs.pop(m, None); save_json(PAY_REQS, reqs)
-                st.info(f"{m} rejected.")
-    else:
-        st.info("No payment requests.")
+    # Upload Paid Members
+    up = st.file_uploader("Upload Paid CSV/XLSX", type=["csv","xlsx"])
+    if up:
+        if up.name.endswith(".csv"): df = pd.read_csv(up,dtype=str)
+        else: df = pd.read_excel(up,engine="openpyxl",dtype=str)
+        if "Mobile_No" not in df: df.columns=["Mobile_No"]
+        df["Mobile_No"]=df["Mobile_No"].apply(normalize_mobile)
+        df=df[df["Mobile_No"]!=""].drop_duplicates()
+        write_paid_list(df); st.success("Paid list updated")
 
-    st.markdown("### Manage Matches")
-    matches = load_json(MATCH_INDEX, {})
-    if matches:
-        for mid, info in list(matches.items()):
-            st.write(f"- {mid} — {info.get('title')}")
-            if st.button(f"Delete match {mid}", key=f"del_{mid}"):
-                matches.pop(mid, None); save_json(MATCH_INDEX, matches)
-                try:
-                    os.remove(match_state_path(mid))
-                except Exception:
-                    pass
-                st.success(f"Deleted match {mid}")
-    else:
-        st.info("No matches.")
-
-# ----------------- END -----------------
+    # Manual Add/Delete
+    st.markdown("### Manual Paid Members")
+    nm = st.text_input("Add Mobile"); 
+    if st.button("Add Paid"):
+        if nm.strip():
+            df = read_paid_list(); m=normalize_mobile(nm)
+            if m not in df["Mobile_No"].tolist():
+                df=pd.concat([df,pd.DataFrame({"Mobile_No":[m]})],ignore_index=True)
+                write_paid_list(df); st.success("Added")
+    df = read_paid_list()
+    if not df.empty:
+        dm = st.selectbox("Delete Mobile", df["Mobile_No"].tolist())
+        if st.button("Delete Paid"): 
+            df2=df[df["Mobile_No"]!=dm]; write_paid_list(df2); st.success("Deleted")
+    else: st.info("No paid members")
