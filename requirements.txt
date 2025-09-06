@@ -1,5 +1,7 @@
 streamlit
 pandas
+openpyxl
 pillow
 matplotlib
-openpyxl
+streamlit-autorefresh
+twilio  # optional, only if you enable SMS sending
