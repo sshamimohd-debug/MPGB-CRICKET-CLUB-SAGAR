@@ -310,14 +310,33 @@ def format_over_ball(total_balls):
     return f"{over_num}.{ball_in_over}"
 
 def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
-    if extras is None: extras = {}
+    """
+    Record an outcome (0,1,2,3,4,6,W,WD,NB,BY,LB etc.) into match state.
+    Also enforces overs_limit and all-out check to end innings automatically.
+    Returns the entry dict on success, or a dict with 'stopped':True and reason.
+    """
+    if extras is None:
+        extras = {}
+
+    # Prevent scoring if match already completed
+    if state.get("status") == "COMPLETED":
+        return {"stopped": True, "reason": "Match already completed"}
+
     bat_team = state["bat_team"]
     sc = state["score"][bat_team]
     striker = state["batting"].get("striker", "")
     non_striker = state["batting"].get("non_striker", "")
     bowler = state["bowling"].get("current_bowler", "") or "Unknown"
 
-    # prepare entry
+    # If innings already ended (safety), block
+    if state.get("status") not in ("INNINGS1", "INNINGS2"):
+        return {"stopped": True, "reason": "Innings not active"}
+
+    # Get team size for all-out logic
+    team_players = state.get("teams", {}).get(bat_team, [])
+    team_size = max(0, len(team_players))
+
+    # prepare entry (store previous snapshots)
     entry = {
         "time": datetime.utcnow().isoformat(),
         "outcome": outcome,
@@ -327,36 +346,50 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         "non_striker": non_striker,
         "bowler": bowler,
         "prev_score": sc.copy(),
-        "prev_batsman": {striker: state["batsman_stats"].get(striker, {}).copy(), non_striker: state["batsman_stats"].get(non_striker, {}).copy()},
-        "prev_bowler": {bowler: state["bowler_stats"].get(bowler, {}).copy()}
+        "prev_batsman": {
+            striker: state.get("batsman_stats", {}).get(striker, {}).copy(),
+            non_striker: state.get("batsman_stats", {}).get(non_striker, {}).copy()
+        },
+        "prev_bowler": {bowler: state.get("bowler_stats", {}).get(bowler, {}).copy()}
     }
 
     # ensure stats exist
+    state.setdefault("batsman_stats", {})
+    state.setdefault("bowler_stats", {})
     state["batsman_stats"].setdefault(striker, {"R": 0, "B": 0, "4": 0, "6": 0})
     state["batsman_stats"].setdefault(non_striker, {"R": 0, "B": 0, "4": 0, "6": 0})
     state["bowler_stats"].setdefault(bowler, {"B": 0, "R": 0, "W": 0})
 
-    # outcomes
-    if str(outcome) in ["0", "1", "2", "3", "4", "6"]:
-        runs = int(outcome)
+    # Helper to increment ball (regular legal ball)
+    def legal_ball_increment():
+        state["bowler_stats"][bowler]["B"] = state["bowler_stats"][bowler].get("B", 0) + 1
+        sc["balls"] = sc.get("balls", 0) + 1
+
+    # Outcomes handling
+    o = str(outcome)
+    if o in ["0", "1", "2", "3", "4", "6"]:
+        runs = int(o)
         state["batsman_stats"][striker]["R"] += runs
         state["batsman_stats"][striker]["B"] += 1
-        if runs == 4: state["batsman_stats"][striker]["4"] += 1
-        if runs == 6: state["batsman_stats"][striker]["6"] += 1
-        state["bowler_stats"][bowler]["B"] += 1
+        if runs == 4:
+            state["batsman_stats"][striker]["4"] = state["batsman_stats"][striker].get("4", 0) + 1
+        if runs == 6:
+            state["batsman_stats"][striker]["6"] = state["batsman_stats"][striker].get("6", 0) + 1
+        legal_ball_increment()
         state["bowler_stats"][bowler]["R"] += runs
-        sc["runs"] += runs
-        sc["balls"] += 1
-        # swap on odd
+        sc["runs"] = sc.get("runs", 0) + runs
+        # swap on odd runs
         if runs % 2 == 1:
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
 
-    elif str(outcome) in ["W", "Wicket"]:
+    elif o in ["W", "Wicket"]:
+        # wicket on a legal ball
         state["batsman_stats"][striker]["B"] += 1
+        legal_ball_increment()
         state["bowler_stats"][bowler]["B"] += 1
         state["bowler_stats"][bowler]["W"] = state["bowler_stats"][bowler].get("W", 0) + 1
-        sc["wkts"] += 1
-        sc["balls"] += 1
+        sc["wkts"] = sc.get("wkts", 0) + 1
+        # bring next batsman
         nxt = state["batting"].get("next_index", 0)
         order = state["batting"].get("order", [])
         next_player = None
@@ -373,45 +406,76 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
             state["batting"]["striker"] = next_player
             state["batsman_stats"].setdefault(next_player, {"R": 0, "B": 0, "4": 0, "6": 0})
 
-    elif str(outcome) in ["WD", "Wide"]:
+    elif o in ["WD", "Wide"]:
         add = int(extras.get("runs", 1))
         state["bowler_stats"][bowler]["R"] += add
-        sc["runs"] += add
-        # no ball count increment
+        sc["runs"] = sc.get("runs", 0) + add
+        # wide is NOT a legal ball => do not increment balls
 
-    elif str(outcome) in ["NB", "NoBall"]:
+    elif o in ["NB", "NoBall"]:
         offbat = int(extras.get("runs_off_bat", 0))
         add = 1 + offbat
         state["bowler_stats"][bowler]["R"] += add
-        sc["runs"] += add
+        sc["runs"] = sc.get("runs", 0) + add
         if offbat > 0:
             state["batsman_stats"][striker]["R"] += offbat
+        # no legal ball increment for the penalty portion
 
-    elif str(outcome) in ["BY", "LB", "Bye", "LegBye"]:
+    elif o in ["BY", "LB", "Bye", "LegBye"]:
         add = int(extras.get("runs", 1))
-        sc["runs"] += add
         state["batsman_stats"][striker]["B"] += 1
+        legal_ball_increment()
         state["bowler_stats"][bowler]["B"] += 1
-        sc["balls"] += 1
+        sc["runs"] = sc.get("runs", 0) + add
         if add % 2 == 1:
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
 
     else:
-        # default treat as dot
+        # default treat as dot (legal)
         state["batsman_stats"][striker]["B"] += 1
+        legal_ball_increment()
         state["bowler_stats"][bowler]["B"] += 1
-        sc["balls"] += 1
 
+    # append ball log
     entry["post_score"] = sc.copy()
-    state["balls_log"].append(entry)
+    state.setdefault("balls_log", []).append(entry)
 
-    # commentary: use pick_commentary to generate standardized line
-    comment_text = pick_commentary(str(outcome), striker, bowler, extras)
-    state["commentary"].append(format_over_ball(sc["balls"]) + " — " + comment_text)
+    # generate commentary
+    comment_text = pick_commentary(o, striker, bowler, extras)
+    state.setdefault("commentary", []).append(format_over_ball(sc.get("balls", 0)) + " — " + comment_text)
+
+    # --- CHECK FOR END OF INNINGS: overs or all-out ---
+    overs_limit = int(state.get("overs_limit", 0)) if state.get("overs_limit") is not None else 0
+    # if overs limit set and reached or wickets equal team_size-1 (all out)
+    overs_reached = False
+    all_out = False
+
+    if overs_limit > 0:
+        if sc.get("balls", 0) >= overs_limit * 6:
+            overs_reached = True
+
+    if team_size > 0:
+        # if number of players is N, team is all-out after N-1 wickets
+        if sc.get("wkts", 0) >= max(0, team_size - 1):
+            all_out = True
+
+    # If innings should end:
+    if overs_reached or all_out:
+        # If currently INNINGS1 -> switch to INNINGS2 (if exists) else mark completed
+        if state.get("status") == "INNINGS1":
+            # prepare for innings 2 if teams exist
+            state["status"] = "INNINGS2"
+            state["innings"] = 2
+            # change batting team
+            state["bat_team"] = "Team B" if state.get("bat_team") == "Team A" else "Team A"
+            # optionally reset batting order/next_index (we keep stored order)
+            # Note: do not automatically change players; scorer should set striker/non-striker for new innings
+        else:
+            # if already INNINGS2 or any other, mark match completed
+            state["status"] = "COMPLETED"
 
     save_match_state(mid, state)
     return entry
-
 def undo_last_ball_full(state, mid):
     if not state.get("balls_log"):
         return False
