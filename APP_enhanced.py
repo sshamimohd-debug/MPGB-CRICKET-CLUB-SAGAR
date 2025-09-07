@@ -90,7 +90,30 @@ def save_json(path, obj):
         os.replace(tmp, path)
     except:
         os.rename(tmp, path)
-
+def is_mobile_paid(mobile):
+    """
+    Return True if mobile (normalized) is in paid list or marked Paid in registry.
+    """
+    m = normalize_mobile(mobile)
+    if not m:
+        return False
+    # 1) check paid list file
+    try:
+        paid_df = read_paid_list()
+        if not paid_df.empty and m in paid_df['Mobile_No'].tolist():
+            return True
+    except Exception:
+        pass
+    # 2) check members registry Paid column
+    try:
+        members = read_members()
+        if 'Mobile' in members.columns and 'Paid' in members.columns:
+            rows = members[members['Mobile'] == m]
+            if not rows.empty and str(rows.iloc[0].get('Paid','')).upper() == 'Y':
+                return True
+    except Exception:
+        pass
+    return False
 def format_over_ball(total_balls):
     if not total_balls:
         return "0.0"
