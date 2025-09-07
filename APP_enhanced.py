@@ -793,23 +793,23 @@ bat = state.get("bat_team","Team A")
 sc = state["score"][bat]
 st.write(f"Team {bat}: {sc.get('runs',0)}/{sc.get('wkts',0)} ({sc.get('balls',0)} balls)")
 
-    # --- Enhanced scoreboard (includes target when chasing) ---
-    overs_completed = sc.get("balls",0)
-    overs_done = f"{overs_completed//6}.{overs_completed%6}"
-    overs_limit = int(state.get("overs_limit",0) or 0)
-    rr = (sc.get("runs",0) / (overs_completed/6)) if overs_completed>0 else 0.0
+# --- Enhanced scoreboard (includes target when chasing) ---
+overs_completed = sc.get("balls",0)
+overs_done = f"{overs_completed//6}.{overs_completed%6}"
+overs_limit = int(state.get("overs_limit",0) or 0)
+rr = (sc.get("runs",0) / (overs_completed/6)) if overs_completed>0 else 0.0
 
-    target_info = ""
-    if state.get("status") == "INNINGS2":
-        other = "Team A" if state.get("bat_team")=="Team B" else "Team B"
-        opp_runs = state["score"].get(other, {}).get("runs",0)
-        target = opp_runs + 1
-        runs_needed = max(0, target - sc.get("runs",0))
-        balls_remaining = max(0, overs_limit*6 - sc.get("balls",0)) if overs_limit>0 else None
-        req_rr = (runs_needed/(balls_remaining/6)) if balls_remaining and balls_remaining>0 else None
-        req_str = f"{runs_needed} runs needed from {balls_remaining} balls" if balls_remaining is not None else f"{runs_needed} runs needed"
-        req_rr_text = f" • Required RR: {req_rr:.2f}" if req_rr is not None else ""
-        target_info = f"<div style='font-size:14px;color:#fff;opacity:0.95;margin-top:6px;'>Target: {target} • {req_str}{req_rr_text}</div>"
+target_info = ""
+if state.get("status") == "INNINGS2":
+    other = "Team A" if state.get("bat_team")=="Team B" else "Team B"
+    opp_runs = state["score"].get(other, {}).get("runs",0)
+    target = opp_runs + 1
+    runs_needed = max(0, target - sc.get("runs",0))
+    balls_remaining = max(0, overs_limit*6 - sc.get("balls",0)) if overs_limit>0 else None
+    req_rr = (runs_needed/(balls_remaining/6)) if balls_remaining and balls_remaining>0 else None
+    req_str = f"{runs_needed} runs needed from {balls_remaining} balls" if balls_remaining is not None else f"{runs_needed} runs needed"
+    req_rr_text = f" • Required RR: {req_rr:.2f}" if req_rr is not None else ""
+    target_info = f"<div style='font-size:14px;color:#fff;opacity:0.95;margin-top:6px;'>Target: {target} • {req_str}{req_rr_text}</div>"
 
     st.markdown(f"""
     <div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
