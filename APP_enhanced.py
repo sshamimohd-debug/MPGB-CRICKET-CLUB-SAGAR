@@ -772,15 +772,26 @@ if menu == "Live Scorer":
     matches = load_matches_index()
     if not matches:
         st.info("No matches found."); st.stop()
-    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
-    state = load_match_state(mid)
-    if not state:
-        st.error("Match state missing."); st.stop()
+   # Select match and force auto-refresh + always reload fresh state
+mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
+# auto-refresh the scorer page every 2 seconds if available
+if HAS_AUTORE:
+    st_autorefresh(interval=2000, key=f"scorer_auto_{mid}")
 
-    st.markdown(f"## {matches[mid]['title']} — Scoring")
-    bat = state.get("bat_team","Team A")
-    sc = state["score"][bat]
-    st.write(f"Team {bat}: {sc.get('runs',0)}/{sc.get('wkts',0)} ({sc.get('balls',0)} balls)")
+# Always load the latest state on each render
+state = load_match_state(mid)
+if not state:
+    st.error("Match state missing."); st.stop()
+
+# current member and normalized mobile
+cm = current_member()
+user_mobile = normalize_mobile(cm["Mobile"]) if cm else ""
+
+# Heading and basic scoreboard summary
+st.markdown(f"## {matches[mid]['title']} — Scoring")
+bat = state.get("bat_team","Team A")
+sc = state["score"][bat]
+st.write(f"Team {bat}: {sc.get('runs',0)}/{sc.get('wkts',0)} ({sc.get('balls',0)} balls)")
 
     # --- Enhanced scoreboard (includes target when chasing) ---
     overs_completed = sc.get("balls",0)
@@ -815,33 +826,57 @@ if menu == "Live Scorer":
     s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
     ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
     bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+# ---- Player cards: round design + current stats visible ----
+st.markdown("""
+<style>
+.player-row { display:flex; gap:16px; align-items:flex-start; flex-wrap:nowrap; overflow-x:auto; padding-bottom:8px; }
+.player-card { background:#ffffff;padding:14px;border-radius:18px;min-width:240px; flex:0 0 auto; box-shadow: 0 8px 20px rgba(3,102,214,0.06); border:1px solid #eef2ff; }
+.player-card .label { font-size:12px;color:#6b7280; }
+.player-card .name { font-size:18px;font-weight:800;margin-top:6px;color:#0f172a; }
+.player-card .meta { font-size:13px;color:#374151;margin-top:8px; }
+.ball-badge { display:inline-block; padding:6px 10px; border-radius:999px; background:#eef2ff; color:#0b6efd; margin-right:6px; font-weight:700; }
+.round-button { border-radius:12px !important; }
+</style>
+""", unsafe_allow_html=True)
 
-    st.markdown("""
-    <style>
-    .player-row { display:flex; gap:16px; align-items:flex-start; flex-wrap:nowrap; overflow-x:auto; padding-bottom:8px; }
-    .player-card { background:#f8fafc;padding:12px;border-radius:10px;min-width:220px; flex:0 0 auto; }
-    </style>
-    """, unsafe_allow_html=True)
+striker = state["batting"].get("striker","")
+non_striker = state["batting"].get("non_striker","")
+bowler = state["bowling"].get("current_bowler","")
 
-    st.markdown(f"""
-    <div class='player-row'>
-      <div class='player-card'>
-        <div style='font-size:12px;color:#555;'>STRIKER</div>
-        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
-        <div style='font-size:12px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
-      </div>
-      <div class='player-card'>
-        <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
-        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
-        <div style='font-size:12px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
-      </div>
-      <div class='player-card'>
-        <div style='font-size:12px;color:#555;'>BOWLER</div>
-        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
-        <div style='font-size:12px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
-      </div>
+s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0,"4":0,"6":0})
+ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0,"4":0,"6":0})
+bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+
+st.markdown(f"""
+<div class='player-row'>
+  <div class='player-card'>
+    <div class='label'>STRIKER</div>
+    <div class='name'>{striker or "-"}</div>
+    <div class='meta'>
+      <span class='ball-badge'>{s_stats.get('R',0)}</span> runs &middot; {s_stats.get('B',0)} balls<br/>
+      <small>4s: {s_stats.get('4',0)} &nbsp; 6s: {s_stats.get('6',0)}</small>
     </div>
-    """, unsafe_allow_html=True)
+  </div>
+
+  <div class='player-card'>
+    <div class='label'>NON-STRIKER</div>
+    <div class='name'>{non_striker or "-"}</div>
+    <div class='meta'>
+      <span class='ball-badge'>{ns_stats.get('R',0)}</span> runs &middot; {ns_stats.get('B',0)} balls<br/>
+      <small>4s: {ns_stats.get('4',0)} &nbsp; 6s: {ns_stats.get('6',0)}</small>
+    </div>
+  </div>
+
+  <div class='player-card'>
+    <div class='label'>BOWLER</div>
+    <div class='name'>{bowler or "-"}</div>
+    <div class='meta'>
+      <span class='ball-badge'>{bw_stats.get('W',0)} wkts</span> &middot; {bw_stats.get('R',0)} runs<br/>
+      <small>Overs: { (bw_stats.get('B',0)//6) }.{ bw_stats.get('B',0)%6 }</small>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # scorer lock & controls
     user_mobile = normalize_mobile(cm["Mobile"]) if cm else ""
@@ -896,35 +931,48 @@ if menu == "Live Scorer":
         state["batting"]["non_striker"] = non_striker_select
         state["bowling"]["current_bowler"] = bowler_select
         save_match_state(mid, state); safe_rerun()
+# ---------------- Scoring Pad (guarded) ----------------
+lock_owner = state.get("scorer_lock", {}).get("locked_by")
+can_score = (state.get("status") in ("INNINGS1","INNINGS2")) and (lock_owner == user_mobile)
 
-    # ---------------- Scoring Pad (guarded) ----------------
-    lock_owner = state.get("scorer_lock", {}).get("locked_by")
-    can_score = (state.get("status") in ("INNINGS1","INNINGS2")) and (lock_owner == user_mobile)
-    if state.get("status") not in ("INNINGS1","INNINGS2"):
-        st.info("Scoring disabled — innings not active or match completed.")
-    elif lock_owner and lock_owner != user_mobile:
-        st.warning(f"Scoring locked by {lock_owner}. You cannot score.")
-    elif not lock_owner:
-        st.info("Acquire scorer lock to start scoring.")
-    else:
-        # scoring pad
-        st.markdown("### Scoring Pad")
-        pad_rows = [["0","1","2"],["3","4","6"],["W","WD","NB"],["BY","LB","0NB"]]
-        for r in pad_rows:
-            cols = st.columns(len(r))
-            for i,v in enumerate(r):
-                if cols[i].button(v, key=f"pad_{v}"):
+if state.get("status") not in ("INNINGS1","INNINGS2"):
+    st.info("Scoring disabled — innings not active or match completed.")
+elif lock_owner and lock_owner != user_mobile:
+    st.warning(f"Scoring locked by {lock_owner}. You cannot score.")
+elif not lock_owner:
+    st.info("Acquire scorer lock to start scoring.")
+else:
+    # scoring pad (rounded buttons)
+    st.markdown("### Scoring Pad")
+    pad_rows = [["0","1","2"],["3","4","6"],["W","WD","NB"],["BY","LB","0NB"]]
+    for r in pad_rows:
+        cols = st.columns(len(r))
+        for i,v in enumerate(r):
+            # unique key per match + button value to avoid collisions across matches
+            btn_key = f"pad_{mid}_{v}"
+            if cols[i].button(v, key=btn_key):
+                try:
                     if v == "0NB":
-                        record_ball_full(state, mid, "NB", extras={"runs_off_bat":0})
+                        _ = record_ball_full(state, mid, "NB", extras={"runs_off_bat":0})
                     else:
-                        record_ball_full(state, mid, v)
-                    st.success(f"Recorded {v}"); safe_rerun()
-        if st.button("Undo Last Ball"):
-            ok = undo_last_ball_full(state, mid)
-            if ok:
-                st.success("Undo successful"); safe_rerun()
-            else:
-                st.warning("No ball to undo")
+                        _ = record_ball_full(state, mid, v)
+                    # ensure persisted (record_ball_full already saves, but call again to be safe)
+                    save_match_state(mid, state)
+                    st.success(f"Recorded {v}")
+                except Exception as e:
+                    st.error(f"Error recording: {e}")
+                # refresh UI so the updated state is reloaded and player cards update
+                safe_rerun()
+
+    # Undo last ball (also persists and refreshes)
+    if st.button("Undo Last Ball", key=f"undo_{mid}"):
+        ok = undo_last_ball_full(state, mid)
+        if ok:
+            st.success("Undo successful")
+            safe_rerun()
+        else:
+            st.warning("No ball to undo")
+# -------------------------------------------------------
 
     # commentary (recent)
     st.markdown("### Commentary (recent)")
@@ -978,6 +1026,27 @@ if menu == "Live Scorer":
             st.write(f"Top scorer: {top_bats[0][0]} — {top_bats[0][1]} runs")
         if top_bowl:
             st.write(f"Best bowling: {top_bowl[0][0]} — {top_bowl[0][1]} wkts")
+# ---- Last 12 balls (rounded badges) ----
+st.markdown("### Last 12 balls")
+last_balls = state.get("balls_log", [])[-12:][::-1]  # latest first
+if not last_balls:
+    st.write("No balls yet.")
+else:
+    sb = "<div style='display:flex;flex-wrap:wrap;gap:8px;'>"
+    for b in last_balls:
+        ov = format_over_ball(b.get("prev_score", {}).get("balls",0))
+        out = str(b.get("outcome",""))
+        striker_b = b.get("striker","")
+        bowler_b = b.get("bowler","")
+        comment = pick_commentary(out, b.get("striker",""), b.get("bowler",""), b.get("extras",{}))
+        # small summary badge
+        sb += f"<div style='background:#fff;border:1px solid #edf2ff;padding:10px;border-radius:14px;min-width:180px;box-shadow:0 6px 18px rgba(3,102,214,0.04)'>"
+        sb += f"<div style='font-weight:800;color:#0b6efd'>{out} &nbsp; <small style=\"color:#475569;font-weight:600\">{ov}</small></div>"
+        sb += f"<div style='font-size:13px;color:#111;margin-top:6px'><b>{striker_b}</b> vs <small>{bowler_b}</small></div>"
+        sb += f"<div style='font-size:12px;color:#475569;margin-top:6px'>{comment}</div>"
+        sb += "</div>"
+    sb += "</div>"
+    st.markdown(sb, unsafe_allow_html=True)
 
     # Exports
     if st.button("Download Match JSON"):
