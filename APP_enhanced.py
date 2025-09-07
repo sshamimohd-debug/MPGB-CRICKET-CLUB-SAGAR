@@ -1,6 +1,6 @@
 # APP_enhanced.py
-# MPGB Cricket Scoring - Full final (ID download, paid-sync, logo, friendly UI, overs.ball & commentary)
-# सब comments हिन्दी में
+# MPGB Cricket Club - Enhanced (CrickPro-like UI, corrected commentary, autosync)
+# Hindi comments where helpful
 
 import streamlit as st
 import pandas as pd
@@ -22,46 +22,59 @@ PHOTOS_DIR = os.path.join(DATA_DIR, "photos")
 MEMBERS_CSV = os.path.join(DATA_DIR, "members.csv")
 PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")
 MATCH_INDEX = os.path.join(DATA_DIR, "matches_index.json")
-ADMIN_PHONE = "8931883300"  # admin mobile only
+ADMIN_PHONE = "8931883300"  # change to your admin mobile if needed
 LOGO_PATH = os.path.join(DATA_DIR, "logo.png")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # ---------------- Commentary templates (simplified, no field areas) ----------------
 RUN_TEMPLATES = [
     "Quick push and a run taken.",
-    "Good placement for a run.",
+    "Good placement and a quick run.",
     "Worked away for a couple.",
     "Nice timing, they'll take two.",
     "Smart running between the wickets.",
-    "Pushed away for a run."
+    "Pushed away to the open side for a run."
 ]
 
 WICKET_TEMPLATES = [
     "Clean bowled! That's a beauty.",
     "Caught — taken safely.",
     "LBW! The umpire raises his finger.",
-    "Edge and taken — batsman walks.",
+    "Edge and taken — batsman has to walk.",
     "Run out! Direct hit.",
     "Stumped — beaten by the bowler."
 ]
 
 EXTRA_TEMPLATES = {
-    "WD": ["Wide called — extra run.", "Wide ball."],
+    "WD": ["Wide called — extra run.", "Wide — one extra."],
     "NB": ["No ball — free hit coming!", "No ball — extra run awarded."],
-    "BY": ["Byes added to the total.", "Byes taken."],
-    "LB": ["Leg-byes taken.", "Leg-bye runs added."]
+    "BY": ["Byes added to the total.", "Byes — runs to the batting side."],
+    "LB": ["Leg-byes added.", "Leg-bye — runs added."]
 }
 
 GENERIC_COMMENTS = [
     "Good over, tight bowling.",
     "Pressure building on the batsman.",
-    "Crowd enjoying the game.",
+    "Crowd enjoying the contest.",
     "That’s a useful run for the batting side."
 ]
 
 # ---------------- Helpers ----------------
+def normalize_mobile(s):
+    if pd.isna(s) or s is None:
+        return ""
+    s = str(s).strip()
+    for ch in [" ", "+", "-", "(", ")"]:
+        s = s.replace(ch, "")
+    digits = "".join([c for c in s if c.isdigit()])
+    if len(digits) > 10:
+        digits = digits[-10:]
+    return digits
+
 def load_json(path, default=None):
     if default is None:
         default = {}
@@ -80,18 +93,7 @@ def save_json(path, obj):
     except:
         os.rename(tmp, path)
 
-def normalize_mobile(s):
-    if pd.isna(s) or s is None:
-        return ""
-    s = str(s).strip()
-    for ch in [" ", "+", "-", "(", ")"]:
-        s = s.replace(ch, "")
-    digits = "".join([c for c in s if c.isdigit()])
-    if len(digits) > 10:
-        digits = digits[-10:]
-    return digits
-
-# ---------------- Members registry ----------------
+# ---------------- Members ----------------
 def ensure_members_file():
     if not os.path.exists(MEMBERS_CSV):
         df = pd.DataFrame(columns=["MemberID", "Name", "Mobile", "Paid"])
@@ -152,7 +154,7 @@ def get_member_photo_path(member_id):
             return p
     return None
 
-# ---------------- Paid list helpers (IMPROVED) ----------------
+# ---------------- Paid list helpers ----------------
 def read_paid_list():
     if os.path.exists(PAID_CSV):
         try:
@@ -179,30 +181,19 @@ def write_paid_list(df):
         st.error(f"Failed to write paid list: {e}")
 
 def is_mobile_paid(mobile):
-    """
-    Returns True if mobile is present in paid list OR if member record exists with Paid == 'Y'.
-    This addresses mismatch problems due to formats.
-    """
     m = normalize_mobile(mobile)
     if not m:
         return False
-    # check paid csv first
     paid = read_paid_list()
     if not paid.empty and m in paid["Mobile_No"].tolist():
         return True
-    # check members registry paid flag
     mems = read_members()
-    if not mems.empty:
-        row = mems[mems["Mobile"] == m]
-        if not row.empty and str(row.iloc[0].get("Paid", "N")).upper() == "Y":
-            return True
+    match = mems[mems["Mobile"] == m]
+    if not match.empty and str(match.iloc[0].get("Paid", "N")).upper() == "Y":
+        return True
     return False
 
 def sync_paid_with_registry():
-    """
-    Read Members_Paid.csv and update members.csv Paid='Y' where mobile matches.
-    Returns: dict {updated_count: int, unmatched: [mobiles]}
-    """
     paid_df = read_paid_list()
     mems = read_members()
     if paid_df.empty:
@@ -210,14 +201,12 @@ def sync_paid_with_registry():
     paid_set = set(paid_df["Mobile_No"].tolist())
     updated = 0
     unmatched = []
-    # mark Paid=Y for matching registry members
     for idx, row in mems.iterrows():
         mob = normalize_mobile(row.get("Mobile", ""))
         if mob and mob in paid_set:
             if mems.at[idx, "Paid"] != "Y":
                 mems.at[idx, "Paid"] = "Y"
                 updated += 1
-    # find paid mobiles not in registry
     reg_mobs = set(mems["Mobile"].apply(normalize_mobile).tolist())
     for p in paid_set:
         if p not in reg_mobs:
@@ -225,7 +214,7 @@ def sync_paid_with_registry():
     write_members(mems)
     return {"updated_count": updated, "unmatched": unmatched}
 
-# ---------------- Match index helpers ----------------
+# ---------------- Match state helpers ----------------
 def load_matches_index():
     return load_json(MATCH_INDEX, {})
 
@@ -237,6 +226,12 @@ def match_state_path(mid):
 
 def save_match_state(mid, state):
     save_json(match_state_path(mid), state)
+    # backup
+    try:
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        save_json(os.path.join(BACKUP_DIR, f"match_{mid}_backup_{ts}.json"), state)
+    except:
+        pass
 
 def load_match_state(mid):
     return load_json(match_state_path(mid), {})
@@ -265,50 +260,49 @@ def init_match_state_full(mid, title, overs, teamA, teamB, venue=""):
     save_match_state(mid, state)
     return state
 
-# ---------------- Commentary helpers ----------------
-def format_over_ball(total_balls):
-    if total_balls <= 0:
-        return "0.0"
-    over_num = (total_balls - 1) // 6
-    ball_in_over = (total_balls - 1) % 6 + 1
-    return f"{over_num}.{ball_in_over}"
-
+# ---------------- Commentary pick function (fixed format) ----------------
 def pick_commentary(outcome, striker, bowler, extras=None):
     """
-    Return a short commentary string prefixed by 'Bowler to Batsman — ...'
-    Rules:
-      - 'It's a HUGE SIX!' for outcome 6
-      - 'That's a FOUR!' for outcome 4
-      - 1/2/3 runs use generic RUN_TEMPLATES
-      - 0 run = dot ball message
-      - Wicket and extras use respective templates
+    Return commentary in format: "Bowler to Striker — <text>"
+    No field-area words. Specific texts for 6 and 4.
     """
     extras = extras or {}
     striker = striker or "Batsman"
     bowler = bowler or "Bowler"
+    text = ""
 
-    if outcome == "6":
+    # Normalize possible outcomes
+    o = str(outcome)
+
+    if o == "6":
         text = "It's a HUGE SIX!"
-    elif outcome == "4":
+    elif o == "4":
         text = "That's a FOUR!"
-    elif outcome in ["1","2","3"]:
+    elif o in ["1", "2", "3"]:
         text = random.choice(RUN_TEMPLATES)
-    elif outcome == "0":
+    elif o in ["0", "dot", ""]:
         text = random.choice(["No runs. Dot ball.", "Tight bowling — dot ball."])
-    elif outcome in ["W","Wicket"]:
+    elif o in ["W", "Wicket"]:
         text = random.choice(WICKET_TEMPLATES)
-    elif outcome in ["WD","Wide"]:
+    elif o in ["WD", "Wide"]:
         text = random.choice(EXTRA_TEMPLATES["WD"])
-    elif outcome in ["NB","NoBall"]:
+    elif o in ["NB", "NoBall"]:
         text = random.choice(EXTRA_TEMPLATES["NB"])
-    elif outcome in ["BY","LB","Bye","LegBye"]:
+    elif o in ["BY", "LB", "Bye", "LegBye"]:
         text = random.choice(EXTRA_TEMPLATES["BY"])
     else:
         text = random.choice(GENERIC_COMMENTS)
 
     return f"{bowler} to {striker} — {text}"
 
-# ---------------- Scoring logic (with commentary) ----------------
+# ---------------- Scoring logic ----------------
+def format_over_ball(total_balls):
+    if total_balls <= 0:
+        return "0.0"
+    over_num = (total_balls) // 6
+    ball_in_over = (total_balls) % 6
+    return f"{over_num}.{ball_in_over}"
+
 def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     if extras is None: extras = {}
     bat_team = state["bat_team"]
@@ -317,6 +311,7 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     non_striker = state["batting"].get("non_striker", "")
     bowler = state["bowling"].get("current_bowler", "") or "Unknown"
 
+    # prepare entry
     entry = {
         "time": datetime.utcnow().isoformat(),
         "outcome": outcome,
@@ -326,16 +321,17 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         "non_striker": non_striker,
         "bowler": bowler,
         "prev_score": sc.copy(),
-        "prev_batsman": {striker: state["batsman_stats"].get(striker, {}).copy(),
-                         non_striker: state["batsman_stats"].get(non_striker, {}).copy()},
+        "prev_batsman": {striker: state["batsman_stats"].get(striker, {}).copy(), non_striker: state["batsman_stats"].get(non_striker, {}).copy()},
         "prev_bowler": {bowler: state["bowler_stats"].get(bowler, {}).copy()}
     }
 
+    # ensure stats exist
     state["batsman_stats"].setdefault(striker, {"R": 0, "B": 0, "4": 0, "6": 0})
     state["batsman_stats"].setdefault(non_striker, {"R": 0, "B": 0, "4": 0, "6": 0})
     state["bowler_stats"].setdefault(bowler, {"B": 0, "R": 0, "W": 0})
 
-    if outcome in ["0", "1", "2", "3", "4", "6"]:
+    # outcomes
+    if str(outcome) in ["0", "1", "2", "3", "4", "6"]:
         runs = int(outcome)
         state["batsman_stats"][striker]["R"] += runs
         state["batsman_stats"][striker]["B"] += 1
@@ -345,14 +341,14 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         state["bowler_stats"][bowler]["R"] += runs
         sc["runs"] += runs
         sc["balls"] += 1
+        # swap on odd
         if runs % 2 == 1:
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
 
-    elif outcome in ["W", "Wicket"]:
-        state["batsman_stats"].setdefault(striker, {"R": 0, "B": 0, "4": 0, "6": 0})
+    elif str(outcome) in ["W", "Wicket"]:
         state["batsman_stats"][striker]["B"] += 1
         state["bowler_stats"][bowler]["B"] += 1
-        state["bowler_stats"][bowler]["W"] += 1
+        state["bowler_stats"][bowler]["W"] = state["bowler_stats"][bowler].get("W", 0) + 1
         sc["wkts"] += 1
         sc["balls"] += 1
         nxt = state["batting"].get("next_index", 0)
@@ -371,12 +367,13 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
             state["batting"]["striker"] = next_player
             state["batsman_stats"].setdefault(next_player, {"R": 0, "B": 0, "4": 0, "6": 0})
 
-    elif outcome in ["WD", "Wide"]:
+    elif str(outcome) in ["WD", "Wide"]:
         add = int(extras.get("runs", 1))
         state["bowler_stats"][bowler]["R"] += add
         sc["runs"] += add
+        # no ball count increment
 
-    elif outcome in ["NB", "NoBall"]:
+    elif str(outcome) in ["NB", "NoBall"]:
         offbat = int(extras.get("runs_off_bat", 0))
         add = 1 + offbat
         state["bowler_stats"][bowler]["R"] += add
@@ -384,7 +381,7 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
         if offbat > 0:
             state["batsman_stats"][striker]["R"] += offbat
 
-    elif outcome in ["BY", "LB", "Bye", "LegBye"]:
+    elif str(outcome) in ["BY", "LB", "Bye", "LegBye"]:
         add = int(extras.get("runs", 1))
         sc["runs"] += add
         state["batsman_stats"][striker]["B"] += 1
@@ -394,6 +391,7 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
             state["batting"]["striker"], state["batting"]["non_striker"] = non_striker, striker
 
     else:
+        # default treat as dot
         state["batsman_stats"][striker]["B"] += 1
         state["bowler_stats"][bowler]["B"] += 1
         sc["balls"] += 1
@@ -401,10 +399,9 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
     entry["post_score"] = sc.copy()
     state["balls_log"].append(entry)
 
-    notation = format_over_ball(sc.get("balls", 0))
-    comment_line = pick_commentary(outcome if outcome else "0", striker, bowler, extras)
-    comment_text = f"{notation} — {comment_line}"
-    state["commentary"].append(comment_text)
+    # commentary: use pick_commentary to generate standardized line
+    comment_text = pick_commentary(str(outcome), striker, bowler, extras)
+    state["commentary"].append(format_over_ball(sc["balls"]) + " — " + comment_text)
 
     save_match_state(mid, state)
     return entry
@@ -457,111 +454,46 @@ def release_scorer_lock(state, mid, phone):
         return True
     return False
 
-# ---------------- ID card generation ----------------
-def generate_id_card_image(member):
-    """
-    member: dict with MemberID, Name, Mobile, Paid
-    returns bytes PNG
-    """
-    W, H = 600, 360
-    bg = Image.new("RGB", (W, H), color=(255, 255, 255))
-    draw = ImageDraw.Draw(bg)
-    # fonts: try to load default PIL fonts (if system has more fonts you can specify)
-    try:
-        font_bold = ImageFont.truetype("arial.ttf", 28)
-        font_med = ImageFont.truetype("arial.ttf", 20)
-        font_small = ImageFont.truetype("arial.ttf", 16)
-    except:
-        font_bold = ImageFont.load_default()
-        font_med = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+# ---------------- Export helpers ----------------
+def export_match_json(state):
+    return json.dumps(state, indent=2, ensure_ascii=False).encode("utf-8")
 
-    # Logo left top (if exists)
-    if os.path.exists(LOGO_PATH):
-        try:
-            logo = Image.open(LOGO_PATH).convert("RGBA")
-            logo.thumbnail((100,100))
-            bg.paste(logo, (20, 20), logo if logo.mode == "RGBA" else None)
-        except:
-            pass
+def export_match_csv(state):
+    rows = []
+    for b in state.get("balls_log", []):
+        rows.append({
+            "time": b.get("time"),
+            "outcome": b.get("outcome"),
+            "striker": b.get("striker"),
+            "non_striker": b.get("non_striker"),
+            "bowler": b.get("bowler"),
+            "extras": json.dumps(b.get("extras", {}), ensure_ascii=False),
+            "wicket": json.dumps(b.get("wicket", {}), ensure_ascii=False)
+        })
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False).encode("utf-8")
 
-    # Photo circle
-    photo = None
-    ppath = get_member_photo_path(member.get("MemberID"))
-    if ppath:
-        try:
-            photo = Image.open(ppath).convert("RGB")
-            photo.thumbnail((160,160))
-        except:
-            photo = None
-    # draw placeholders
-    draw.rectangle([150, 20, W-20, 120], outline=(200,200,200), width=1)
+# ---------------- UI setup ----------------
+st.set_page_config(page_title="MPGB Cricket Club - Sagar", layout="wide")
 
-    # place photo
-    if photo:
-        box = (30, 140, 190, 300)
-        # paste centered
-        ph = photo.resize((160,160))
-        bg.paste(ph, (30, 140))
-    else:
-        # placeholder circle
-        draw.ellipse([30,140,190,300], outline=(120,120,120), width=2)
-        draw.text((70,200), "No Photo", font=font_small, fill=(120,120,120))
-
-    # Text fields
-    x = 210
-    y = 140
-    draw.text((x, y), f"Member ID: {member.get('MemberID','-')}", font=font_med, fill=(0,0,0))
-    draw.text((x, y+30), f"Name: {member.get('Name','-')}", font=font_med, fill=(0,0,0))
-    draw.text((x, y+60), f"Mobile: {member.get('Mobile','-')}", font=font_med, fill=(0,0,0))
-    paid_text = "PAID" if str(member.get("Paid","N")).upper()=="Y" else "NOT PAID"
-    draw.text((x, y+90), f"Status: {paid_text}", font=font_med, fill=(0,0,0))
-
-    # footer
-    draw.text((20, H-30), "MPGB Cricket Club - Sagar", font=font_small, fill=(50,50,50))
-    draw.text((W-250, H-30), "(An official group of Madhya Pradesh Gramin Bank)", font=font_small, fill=(80,80,80))
-
-    bytes_io = io.BytesIO()
-    bg.save(bytes_io, format="PNG")
-    bytes_io.seek(0)
-    return bytes_io
-
-# ---------------- UI & Pages ----------------
-st.set_page_config(page_title="MPGB Scoring - Sagar", layout="wide")
-
-# --- Professional blue banner header (Proper Case + logo + cricket badge) ---
+# Banner CSS and markup
 BANNER_CSS = """
 <style>
 .app-banner {
   width:100%;
-  background: linear-gradient(90deg,#0b6efd 0%, #055ecb 100%);
-  color: #ffffff;
-  padding: 14px 18px;
-  border-radius: 8px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  box-shadow: 0 4px 18px rgba(5, 94, 203, 0.18);
+  background: linear-gradient(90deg,#0b6efd,#055ecb);
+  color:#fff; padding:14px 18px; border-radius:8px;
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  box-shadow:0 4px 18px rgba(5,94,203,.18);
 }
-.banner-left { display:flex; align-items:center; gap:12px; }
-.banner-title { font-size:22px; font-weight:800; letter-spacing:0.4px; margin:0; }
-.banner-sub { font-size:12px; opacity:0.95; margin-top:4px; }
-.banner-right { display:flex; align-items:center; gap:8px; }
-.cricket-badge {
-  background: rgba(255,255,255,0.12);
-  padding:8px 12px;
-  border-radius:999px;
-  font-weight:700;
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-}
+.banner-title{font-size:22px;font-weight:800;margin:0;}
+.banner-sub{font-size:12px;opacity:.95;margin-top:4px;}
+.cricket-badge{background:rgba(255,255,255,.12);padding:8px 12px;border-radius:999px;font-weight:700;}
 </style>
 """
 st.markdown(BANNER_CSS, unsafe_allow_html=True)
 
-# Build logo html safely (inline base64) if logo present
+# Logo html
 logo_html = ""
 if os.path.exists(LOGO_PATH):
     import base64
@@ -570,30 +502,43 @@ if os.path.exists(LOGO_PATH):
         logo_b64 = base64.b64encode(logo_bytes).decode()
         logo_html = f"<img src='data:image/png;base64,{logo_b64}' style='width:64px;height:64px;border-radius:8px;'/>"
     except:
-        logo_html = "<div style='width:64px;height:64px;border-radius:8px;background:rgba(255,255,255,0.14);display:flex;align-items:center;justify-content:center;'>MPGB</div>"
+        logo_html = "<div style='width:64px;height:64px;border-radius:8px;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;'>MPGB</div>"
 else:
-    logo_html = "<div style='width:64px;height:64px;border-radius:8px;background:rgba(255,255,255,0.14);display:flex;align-items:center;justify-content:center;'>MPGB</div>"
+    logo_html = "<div style='width:64px;height:64px;border-radius:8px;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;'>MPGB</div>"
 
-banner_html = f"""
+st.markdown(f"""
 <div class="app-banner">
-  <div class="banner-left">
+  <div style='display:flex;align-items:center;gap:12px;'>
     {logo_html}
     <div>
       <div class="banner-title">MPGB Cricket Club - Sagar</div>
       <div class="banner-sub">An official group of Madhya Pradesh Gramin Bank</div>
     </div>
   </div>
-  <div class="banner-right">
-    <div class="cricket-badge">🏏 Cricket • Score • Share</div>
-  </div>
+  <div><div class="cricket-badge">🏏 Cricket • Score • Share</div></div>
 </div>
-"""
-st.markdown(banner_html, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# small spacing
 st.markdown("<br/>", unsafe_allow_html=True)
 
-# ---------------- Current member helper & roles ----------------
+# small CSS for CrickPro-style buttons (applies globally)
+BUTTON_CSS = """
+<style>
+div.stButton > button:first-child {
+    background-color:#0b6efd !important;
+    color: white !important;
+    border-radius: 8px !important;
+    height:48px !important;
+    min-width:64px !important;
+    font-size:18px !important;
+    font-weight:700 !important;
+    box-shadow: 0 6px 14px rgba(11,110,253,0.18);
+}
+</style>
+"""
+st.markdown(BUTTON_CSS, unsafe_allow_html=True)
+
+# ---------------- Current member helper & sidebar ----------------
 def current_member():
     mid = st.session_state.get("MemberID", "")
     if not mid:
@@ -614,7 +559,6 @@ def get_role_from_mobile(mobile):
         return "member"
     return "guest"
 
-# ---------------- Sidebar member card + ID download (keep, but no login form) ----------------
 mem = current_member()
 st.sidebar.title("Member")
 if mem:
@@ -626,49 +570,26 @@ if mem:
     ppath = get_member_photo_path(mem.get("MemberID"))
     if ppath:
         st.sidebar.image(ppath, width=120)
-    # ID download button
-    id_bytes = generate_id_card_image(mem)
-    st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
-    # small edit options
-    if st.sidebar.button("Edit name/photo"):
-        with st.sidebar.form("edit_profile", clear_on_submit=False):
-            new_name = st.text_input("New name", value=mem.get("Name"))
-            new_photo = st.file_uploader("New photo", type=["jpg","jpeg","png"], key="edit_photo")
-            if st.form_submit_button("Save"):
-                mdf = read_members()
-                mdf.loc[mdf["MemberID"] == mem.get("MemberID"), "Name"] = new_name.strip()
-                write_members(mdf)
-                if new_photo:
-                    save_member_photo(mem.get("MemberID"), new_photo)
-                st.sidebar.success("Profile updated. Please logout & login to refresh.")
+    id_bytes = io.BytesIO(generate_id_card_image(mem).getvalue()) if mem else None
+    if id_bytes:
+        st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
+    if st.sidebar.button("Logout"):
+        st.session_state.pop("MemberID", None)
+        st.experimental_rerun()
 else:
-    st.sidebar.info("Guest — go to Menu → Login / Register to login.")
+    st.sidebar.info("Guest — go to Menu → Login / Register")
 
-# ---------------- Menu (top) ----------------
+# ---------------- Menu (sidebar) ----------------
 menu = st.sidebar.selectbox("Menu", ["Home","Login / Register","Match Setup","Live Scorer","Live Score (Public)","Player Stats","Admin"])
 
-# ---------------- Home ----------------
+# ---------------- Pages ----------------
 if menu == "Home":
     st.subheader("Welcome to MPGB Cricket Club - Sagar")
-    st.markdown("**(An official group of Madhya Pradesh Gramin Bank)**")
-    st.write("""
-    - Guests can view live score and player stats.
-    - Paid members can create matches and score.
-    - Admin (only assigned mobile) can manage paid list and members.
-    """)
-    st.markdown("#### Quick links")
-    c1, c2, c3 = st.columns(3)
-    if c1.button("Create Match"):
-        st.experimental_set_query_params(page="match_setup"); st.rerun()
-    if c2.button("Live Score"):
-        st.experimental_set_query_params(page="live_score"); st.rerun()
-    if c3.button("Register"):
-        st.experimental_set_query_params(page="register"); st.rerun()
+    st.write("Use the Menu to create matches, score and view live scoreboard. Login/Register to access member features.")
 
-# ---------------- Login / Register (moved into menu) ----------------
+# ---------------- Login / Register ----------------
 if menu == "Login / Register":
     st.header("Login / Register")
-    st.write("Login with mobile. If not registered, register below.")
     login_mobile = st.text_input("Enter mobile (10 digits)", key="ui_login_mobile")
     col1, col2 = st.columns([1,1])
     with col1:
@@ -693,7 +614,7 @@ if menu == "Login / Register":
             if is_mobile_paid(login_mobile):
                 st.success("Status: VERIFIED — membership paid ✔️")
             else:
-                st.warning("Status: NOT VERIFIED — Please contact admin or upload paid list.")
+                st.warning("Status: NOT VERIFIED — Please contact admin.")
     st.markdown("### Register (if new)")
     with st.form("ui_register_form"):
         rname = st.text_input("Full name")
@@ -723,7 +644,7 @@ if menu == "Match Setup":
     cm = current_member()
     role = get_role_from_mobile(cm["Mobile"]) if cm else "guest"
     if role not in ["member","admin"]:
-        st.warning("Match creation is for paid members only. Please ensure your mobile is verified in paid list.")
+        st.warning("Match creation is for paid members only.")
         st.stop()
     st.subheader("Create / Manage Matches")
     matches = load_matches_index()
@@ -789,51 +710,51 @@ if menu == "Live Scorer":
     state = load_match_state(mid)
     if not state:
         st.error("Match state missing."); st.stop()
+
     st.markdown(f"## {matches[mid]['title']} — Scoring")
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
     st.write(f"**{bat}**: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
-# --- START: CrickPro-style Scorecard + Summary (Live Scorer) ---
-# Big scoreboard card
-overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
-rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
 
-st.markdown(f"""
-<div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
-  <div style='font-size:38px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
-  <div style='font-size:16px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
-</div>
-""", unsafe_allow_html=True)
+    # --- START: CrickPro-style Scorecard + Summary (Live Scorer) ---
+    overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
+    rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
 
-# Player summary cards (Striker / Non-striker / Bowler)
-striker = state["batting"].get("striker","")
-non_striker = state["batting"].get("non_striker","")
-bowler = state["bowling"].get("current_bowler","")
+    st.markdown(f"""
+    <div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
+      <div style='font-size:38px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
+      <div style='font-size:16px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
-ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
-bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+    striker = state["batting"].get("striker","")
+    non_striker = state["batting"].get("non_striker","")
+    bowler = state["bowling"].get("current_bowler","")
 
-st.markdown(f"""
-<div style='display:flex;gap:16px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>STRIKER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
-  </div>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
-  </div>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>BOWLER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-# --- END: CrickPro-style Scorecard + Summary (Live Scorer) ---
+    s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
+    ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
+    bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+
+    st.markdown(f"""
+    <div style='display:flex;gap:16px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
+      <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+        <div style='font-size:12px;color:#555;'>STRIKER</div>
+        <div style='font-size:18px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
+        <div style='font-size:13px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
+      </div>
+      <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+        <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
+        <div style='font-size:18px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
+        <div style='font-size:13px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
+      </div>
+      <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+        <div style='font-size:12px;color:#555;'>BOWLER</div>
+        <div style='font-size:18px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
+        <div style='font-size:13px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    # --- END: CrickPro-style Scorecard + Summary (Live Scorer) ---
 
     # scorer lock
     user_mobile = normalize_mobile(cm["Mobile"])
@@ -867,19 +788,19 @@ st.markdown(f"""
     with cols[0]:
         try: idx0 = team_list.index(state["batting"].get("striker",""))
         except: idx0 = 0
-        striker = st.selectbox("Striker", options=team_list, index=idx0)
+        striker_select = st.selectbox("Striker", options=team_list, index=idx0)
     with cols[1]:
         try: idx1 = team_list.index(state["batting"].get("non_striker",""))
         except: idx1 = 0
-        non_striker = st.selectbox("Non-Striker", options=team_list, index=idx1)
+        non_striker_select = st.selectbox("Non-Striker", options=team_list, index=idx1)
     with cols[2]:
-        bowler = st.selectbox("Bowler", options=teams.get(opp_team, []))
+        bowler_select = st.selectbox("Bowler", options=teams.get(opp_team, []))
     if st.button("Set Players for Over"):
-        state["batting"]["striker"]=striker; state["batting"]["non_striker"]=non_striker
-        state["bowling"]["current_bowler"]=bowler
+        state["batting"]["striker"]=striker_select; state["batting"]["non_striker"]=non_striker_select
+        state["bowling"]["current_bowler"]=bowler_select
         save_match_state(mid, state); st.success("Players set"); st.rerun()
 
-    # scoring pad
+    # scoring pad (styled buttons)
     st.markdown("### Scoring Pad")
     pad_rows = [["0","1","2"],["3","4","6"],["W","WD","NB"],["BY","LB","0NB"]]
     for r in pad_rows:
@@ -918,8 +839,26 @@ st.markdown(f"""
         c2.write(f"**{display}** — {out} — {b}")
 
     st.markdown("### Commentary (recent)")
-    for txt in state.get("commentary", [])[-10:][::-1]:
-        st.write(txt)
+    for txt in state.get("commentary", [])[-20:][::-1]:
+        st.markdown(f"<div style='background:#f1f5f9;padding:8px;border-radius:8px;margin-bottom:6px;'>{txt}</div>", unsafe_allow_html=True)
+
+    # End innings / End match / Export
+    c1, c2, c3 = st.columns([1,1,1])
+    if c1.button("End Innings"):
+        if state.get("status") == "INNINGS1":
+            state["status"] = "INNINGS2"; state["innings"] = 2
+            state["bat_team"] = "Team B" if state["bat_team"] == "Team A" else "Team A"
+        else:
+            state["status"] = "COMPLETED"
+        save_match_state(mid, state); st.success("Innings switched/ended"); st.rerun()
+    if c2.button("End Match"):
+        state["status"] = "COMPLETED"; save_match_state(mid, state); st.success("Match marked completed"); st.rerun()
+    if c3.button("Download Match JSON"):
+        st.download_button("Download JSON", data=export_match_json(state), file_name=f"match_{mid}.json", mime="application/json")
+
+    # CSV export
+    csv_bytes = export_match_csv(state)
+    st.download_button("Download Ball Log CSV", data=csv_bytes, file_name=f"match_{mid}_balls.csv", mime="text/csv")
 
 # ---------------- Live Score (Public) ----------------
 if menu == "Live Score (Public)":
@@ -931,52 +870,51 @@ if menu == "Live Score (Public)":
     if not state:
         st.error("Match state missing"); st.stop()
     if HAS_AUTORE:
-        st_autorefresh(interval=2000, key=f"auto_{mid}")
+        st_autorefresh(interval=3000, key=f"auto_{mid}")
     st.markdown(f"### {matches[mid]['title']}")
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
     st.write(f"{bat}: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
-    # --- START: CrickPro-style Scorecard + Summary (Live Scorer) ---
-# Big scoreboard card
-overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
-rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
 
-st.markdown(f"""
-<div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
-  <div style='font-size:38px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
-  <div style='font-size:16px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
-</div>
-""", unsafe_allow_html=True)
+    # --- START: CrickPro-style Scorecard + Summary (Public) ---
+    overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
+    rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
 
-# Player summary cards (Striker / Non-striker / Bowler)
-striker = state["batting"].get("striker","")
-non_striker = state["batting"].get("non_striker","")
-bowler = state["bowling"].get("current_bowler","")
+    st.markdown(f"""
+    <div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
+      <div style='font-size:34px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
+      <div style='font-size:14px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
-ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
-bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+    striker = state["batting"].get("striker","")
+    non_striker = state["batting"].get("non_striker","")
+    bowler = state["bowling"].get("current_bowler","")
 
-st.markdown(f"""
-<div style='display:flex;gap:16px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>STRIKER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
-  </div>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
-  </div>
-  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
-    <div style='font-size:12px;color:#555;'>BOWLER</div>
-    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
-    <div style='font-size:13px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-# --- END: CrickPro-style Scorecard + Summary (Live Scorer) ---
+    s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
+    ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
+    bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+
+    st.markdown(f"""
+    <div style='display:flex;gap:12px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
+      <div style='background:#ffffff;padding:10px;border-radius:10px;min-width:200px;'>
+        <div style='font-size:12px;color:#555;'>STRIKER</div>
+        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
+        <div style='font-size:12px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
+      </div>
+      <div style='background:#ffffff;padding:10px;border-radius:10px;min-width:200px;'>
+        <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
+        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
+        <div style='font-size:12px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
+      </div>
+      <div style='background:#ffffff;padding:10px;border-radius:10px;min-width:200px;'>
+        <div style='font-size:12px;color:#555;'>BOWLER</div>
+        <div style='font-size:16px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
+        <div style='font-size:12px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    # --- END: CrickPro-style Scorecard + Summary (Public) ---
 
     st.markdown("### Last balls")
     mems_df = read_members()
@@ -994,7 +932,7 @@ st.markdown(f"""
         cols[1].write(f"**{display}** — {out} — {b}")
     st.markdown("### Commentary")
     for txt in state.get("commentary", [])[-12:][::-1]:
-        st.write(txt)
+        st.markdown(f"<div style='background:#f8fafc;padding:8px;border-radius:8px;margin-bottom:6px;'>{txt}</div>", unsafe_allow_html=True)
 
 # ---------------- Player Stats ----------------
 if menu == "Player Stats":
@@ -1086,4 +1024,4 @@ if menu == "Admin":
 
 # ---------------- Footer ----------------
 st.markdown("---")
-st.markdown("Note: Login by mobile only. Admin mobile is restricted. Photos stored in `data/photos/`.")
+st.markdown("Note: Login by mobile only. Admin mobile is restricted. Photos stored in `data/photos/`. To embed scoreboard in OBS use `?mid=<id>&embed=1`.")
