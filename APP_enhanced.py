@@ -760,113 +760,243 @@ if menu == "Match Setup":
                     except: pass
                     st.success("Deleted")
 
-# ---------------- Live Scorer ----------------
+# Paste this block into your APP_enhanced.py replacing the `if menu == "Live Scorer": pass` block.
+# It uses your existing helper functions (load_matches_index, load_match_state, save_match_state,
+# record_ball_full, try_acquire_scorer_lock, release_scorer_lock, normalize_mobile, current_member).
+
 if menu == "Live Scorer":
-    st.header("Live Scorer")
+    st.header("Live Scorer — MPGB (Enhanced UI)")
+
+    # Small CSS to make it look modern (card-like)
+    st.markdown("""
+    <style>
+    .score-card {background: linear-gradient(90deg,#0b6efd,#055ecb);color:white;padding:18px;border-radius:12px;}
+    .small-card {background:#fff;padding:12px;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,0.06);}
+    .btn-grid button{min-width:60px;height:44px;border-radius:8px;margin:3px;font-weight:700}
+    .batsman-row{display:flex;justify-content:space-between;align-items:center;padding:8px 6px;border-bottom:1px solid #f1f5f9}
+    </style>
+    """, unsafe_allow_html=True)
+
     cm = current_member()
     if not cm:
-        st.warning("स्कोर करने के लिए पहले login करें (Sidebar → Login)."); st.stop()
+        st.warning("स्कोर करने के लिए पहले login करें (Sidebar → Login).")
+        st.stop()
 
-    # Check role
+    # role check
     role = "admin" if normalize_mobile(cm.get("Mobile","")) == normalize_mobile(ADMIN_PHONE) else ("member" if is_mobile_paid(cm.get("Mobile","")) else "guest")
     if role not in ["member","admin"]:
-        st.warning("Scoring के लिए paid member होना ज़रूरी है."); st.stop()
+        st.warning("Scoring के लिए paid member होना ज़रूरी है.")
+        st.stop()
 
     matches = load_matches_index()
     if not matches:
-        st.info("कोई मैच उपलब्ध नहीं है — पहले Match Setup में मैच बनाइए."); st.stop()
+        st.info("कोई मैच उपलब्ध नहीं है — पहले Match Setup में मैच बनाइए.")
+        st.stop()
 
-    mid = st.selectbox("Select Match", options=list(matches.keys()),
-                       format_func=lambda x: f"{x} — {matches[x]['title']}")
+    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
     state = load_match_state(mid)
     if not state:
-        st.error("Match state लोड नहीं हो पाया — match state missing."); st.stop()
+        st.error("Match state लोड नहीं हो पाया — match state missing.")
+        st.stop()
 
-    # show basic score
+    # Top scoreboard
     bat = state.get("bat_team","Team A")
     sc = state.get("score", {}).get(bat, {"runs":0,"wkts":0,"balls":0})
-    overs_done = f"{sc.get('balls',0)//6}.{sc.get('balls',0)%6}"
-    st.markdown(f"**{state.get('title','Match')}** — Batting: **{bat}**  •  Score: **{sc.get('runs',0)}/{sc.get('wkts',0)}**  ({overs_done} overs)")
+    other = "Team A" if bat == "Team B" else "Team B"
+    opp_sc = state.get("score", {}).get(other, {"runs":0,"wkts":0,"balls":0})
 
-    # scorer lock info
-    lock = state.get("scorer_lock", {})
-    locked_by = lock.get("locked_by")
-    expires_at = lock.get("expires_at")
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([2,1])
     with col1:
-        if locked_by and locked_by != normalize_mobile(cm.get("Mobile","")):
+        st.markdown(f"<div class='score-card'>\n  <div style='font-size:28px;font-weight:900'>{state.get('title','Match')}</div>\n  <div style='font-size:22px;margin-top:8px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:22px'>{sc.get('wkts',0)}</span></div>\n  <div style='font-size:14px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {((sc.get('runs',0)/(sc.get('balls',0)/6)) if sc.get('balls',0)>0 else 0):.2f}</div>\n</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='margin-top:8px' class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown("**Current Players**")
+        br = state.get('batting',{})
+        st.markdown(f"- Striker: **{br.get('striker','-')}**")
+        st.markdown(f"- Non-striker: **{br.get('non_striker','-')}**")
+        st.markdown(f"- Next index: **{br.get('next_index',0)}**")
+        st.markdown("---")
+        st.markdown("**Bowling**")
+        st.markdown(f"- Current: **{state.get('bowling',{}).get('current_bowler','-')}**")
+        st.markdown(f"- Last over: **{state.get('bowling',{}).get('last_over_bowler','-')}**")
+
+    st.markdown("---")
+
+    # scorer lock and controls
+    lock = state.get('scorer_lock', {})
+    locked_by = lock.get('locked_by')
+    colA, colB = st.columns([1,1])
+    with colA:
+        if locked_by and locked_by != normalize_mobile(cm.get('Mobile','')):
             st.warning(f"स्कोरर लॉक: यह मैच पहले से {locked_by} द्वारा लॉक है।")
-        elif locked_by == normalize_mobile(cm.get("Mobile","")):
+        elif locked_by == normalize_mobile(cm.get('Mobile','')):
             st.success("आपके पास स्कोरर लॉक है।")
         else:
-            if st.button("Acquire Scorer Lock"):
-                ok = try_acquire_scorer_lock(state, mid, normalize_mobile(cm.get("Mobile","")))
+            if st.button("Acquire Lock"):
+                ok = try_acquire_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
                 if ok:
                     st.experimental_rerun()
                 else:
-                    st.error("लॉक नहीं लिया जा सका। शायद कोई और ले चुका है।")
-    with col2:
-        if st.button("Release Scorer Lock"):
-            ok = release_scorer_lock(state, mid, normalize_mobile(cm.get("Mobile","")))
+                    st.error("लॉक नहीं लिया जा सका।")
+    with colB:
+        if st.button("Release Lock"):
+            ok = release_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
             if ok:
-                st.success("लॉक छोड़ा गया।"); st.experimental_rerun()
+                st.success("लॉक छोड़ा गया।")
+                st.experimental_rerun()
             else:
                 st.info("आपके पास लॉक नहीं था।")
 
-    # require lock to make changes (optional safety)
-    lock_ok = (not state.get("scorer_lock")) or (state.get("scorer_lock",{}).get("locked_by") == normalize_mobile(cm.get("Mobile","")))
+    # require lock to change
+    lock_ok = (not state.get('scorer_lock')) or (state.get('scorer_lock',{}).get('locked_by') == normalize_mobile(cm.get('Mobile','')))
     if not lock_ok:
-        st.info("स्कोर करने के लिए पहले 'Acquire Scorer Lock' लें।"); st.stop()
+        st.info("स्कोर करने से पहले Acquire Lock लें।")
+        st.stop()
 
-    # Scoring inputs
-    st.subheader("Record Ball")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        bowler = st.text_input("Current Bowler", value=state.get("bowling",{}).get("current_bowler",""))
-    with col2:
-        striker = st.text_input("Striker (name/mobile)", value=state.get("batting",{}).get("striker",""))
-    with col3:
-        non_striker = st.text_input("Non-striker", value=state.get("batting",{}).get("non_striker",""))
+    # Left column: interactive scoring buttons like modern apps
+    left, right = st.columns([2,1])
+    with left:
+        st.subheader("Quick Actions")
+        # Run buttons row
+        runs = st.columns(6)
+        with runs[0]:
+            if st.button("0"):
+                try:
+                    state.setdefault('bowling',{})['current_bowler'] = state.get('bowling',{}).get('current_bowler','') or 'Unknown'
+                    entry = record_ball_full(state, mid, '0')
+                    save_match_state(mid, state)
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with runs[1]:
+            if st.button("1"):
+                try:
+                    entry = record_ball_full(state, mid, '1')
+                    save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with runs[2]:
+            if st.button("2"):
+                try:
+                    entry = record_ball_full(state, mid, '2'); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with runs[3]:
+            if st.button("3"):
+                try:
+                    entry = record_ball_full(state, mid, '3'); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with runs[4]:
+            if st.button("4 🎯"):
+                try:
+                    entry = record_ball_full(state, mid, '4'); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with runs[5]:
+            if st.button("6 🔥"):
+                try:
+                    entry = record_ball_full(state, mid, '6'); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
 
-    outcome = st.selectbox("Outcome", options=["0","1","2","3","4","6","W","WD","NB","BY","LB"], index=0)
-    extras_runs = 0
-    extras = {}
-    if outcome in ["WD","NB","BY","LB"]:
-        extras_runs = st.number_input("Extras runs", min_value=0, max_value=10, value=1)
-        if outcome == "NB":
-            offbat = st.number_input("Runs off bat on NoBall", min_value=0, max_value=10, value=0)
-            extras["runs_off_bat"] = int(offbat)
-            extras["runs"] = int(extras_runs)
+        # Extras and wicket row
+        ex1, ex2, ex3 = st.columns(3)
+        with ex1:
+            if st.button("Wide (WD)"):
+                try:
+                    entry = record_ball_full(state, mid, 'WD', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with ex2:
+            if st.button("No Ball (NB)"):
+                try:
+                    entry = record_ball_full(state, mid, 'NB', extras={'runs_off_bat':0}); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+        with ex3:
+            if st.button("Bye (BY)"):
+                try:
+                    entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
+                except Exception as e:
+                    st.error(e)
+
+        st.markdown("---")
+        st.subheader("Advanced: Record Custom Ball")
+        with st.form("custom_ball"):
+            c_bowler = st.text_input("Bowler", value=state.get('bowling',{}).get('current_bowler',''))
+            c_striker = st.text_input("Striker", value=state.get('batting',{}).get('striker',''))
+            c_outcome = st.selectbox("Outcome", ["0","1","2","3","4","6","W","WD","NB","BY","LB"])
+            c_extras = st.text_input("Extras JSON (e.g. {\"runs\":1})", value="")
+            c_newbat = st.text_input("New batsman if wicket (optional)")
+            submit = st.form_submit_button("Record Custom Ball")
+            if submit:
+                try:
+                    state.setdefault('bowling',{})['current_bowler'] = c_bowler or state.get('bowling',{}).get('current_bowler','')
+                    state.setdefault('batting',{})['striker'] = c_striker or state.get('batting',{}).get('striker','')
+                    extras = {}
+                    if c_extras.strip():
+                        try:
+                            extras = json.loads(c_extras)
+                        except:
+                            st.error("Extras JSON invalid")
+                            extras = {}
+                    wicket_info = None
+                    if c_outcome in ['W']:
+                        wicket_info = {'type':'W', 'new_batsman': c_newbat} if c_newbat.strip() else {'type':'W'}
+                    entry = record_ball_full(state, mid, c_outcome, extras=extras, wicket_info=wicket_info)
+                    save_match_state(mid, state)
+                    st.success("Recorded")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+
+    # Right column: detailed lists — batsmen, bowlers, commentary
+    with right:
+        st.subheader("Batsmen")
+        bats = state.get('batsman_stats', {})
+        if not bats:
+            st.info("No batsman data yet")
         else:
-            extras["runs"] = int(extras_runs)
+            for name, vals in bats.items():
+                st.markdown(f"<div class='small-card'>\n  <div class='batsman-row'><div><strong>{name}</strong><div style='font-size:12px'>R: {vals.get('R',0)} • B: {vals.get('B',0)} • 4s: {vals.get('4',0)} • 6s: {vals.get('6',0)}</div></div><div style='font-weight:800'>{( (vals.get('R',0)/max(1,vals.get('B',0)))*100 ):.1f}</div></div>\n</div>", unsafe_allow_html=True)
 
-    wicket_info = {}
-    if outcome in ["W"]:
-        wcol1, wcol2 = st.columns(2)
-        with wcol1:
-            wtype = st.selectbox("Wicket type", options=["Caught","Bowled","LBW","Run Out","Stumped","Hit Wicket"])
-        with wcol2:
-            new_bat = st.text_input("New batsman (optional)")
-            if new_bat.strip():
-                wicket_info["new_batsman"] = new_bat.strip()
-        wicket_info["type"] = wtype
+        st.markdown("---")
+        st.subheader("Bowlers")
+        bowl = state.get('bowler_stats', {})
+        if not bowl:
+            st.info("No bowlers yet")
+        else:
+            for name, vals in bowl.items():
+                st.markdown(f"<div class='small-card'><div style='padding:6px'><strong>{name}</strong><div style='font-size:12px'>O: {format_over_ball(vals.get('B',0))} • R: {vals.get('R',0)} • W: {vals.get('W',0)}</div></div></div>", unsafe_allow_html=True)
 
-    if st.button("Record Ball"):
-        try:
-            # ensure state fields exist
-            state.setdefault("bowling", {})["current_bowler"] = bowler or state.get("bowling",{}).get("current_bowler","")
-            state.setdefault("batting", {})["striker"] = striker or state.get("batting",{}).get("striker","")
-            state.setdefault("batting", {})["non_striker"] = non_striker or state.get("batting",{}).get("non_striker","")
-            entry = record_ball_full(state, mid, outcome, extras=extras, wicket_info=(wicket_info if wicket_info else None))
+        st.markdown("---")
+        st.subheader("Last Balls / Commentary")
+        for txt in state.get('commentary', [])[-12:][::-1]:
+            st.markdown(f"- {txt}")
+
+    # Footer actions: Undo, Export, End innings/match
+    st.markdown("---")
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        if st.button("Undo Last Ball"):
+            ok = undo_last_ball_full(state, mid)
+            if ok:
+                save_match_state(mid, state); st.success("Last ball undone."); st.experimental_rerun()
+            else:
+                st.info("No ball to undo.")
+    with f2:
+        if st.button("Export JSON"):
+            data = export_match_json(state)
+            st.download_button("Download JSON", data=data, file_name=f"match_{mid}.json", mime="application/json")
+    with f3:
+        if st.button("End Match (Complete)"):
+            state['status'] = 'COMPLETED'
             save_match_state(mid, state)
-            st.success("Ball recorded.")
-            st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Recording failed: {e}")
+            st.success("Match marked completed."); st.experimental_rerun()
 
-    st.markdown("### Last 10 commentary")
-    for txt in state.get("commentary", [])[-10:][::-1]:
-        st.markdown(f"- {txt}")
+    # save state in case any UI changes modified it
+    save_match_state(mid, state)
 
 # ---------------- Player Stats ----------------
 if menu == "Player Stats":
