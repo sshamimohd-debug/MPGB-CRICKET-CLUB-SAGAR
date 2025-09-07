@@ -28,39 +28,37 @@ LOGO_PATH = os.path.join(DATA_DIR, "logo.png")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
-# ---------------- Commentary templates (English) ----------------
+# ---------------- Commentary templates (simplified, no field areas) ----------------
 RUN_TEMPLATES = [
-    "A nice drive for a single.",
-    "Quick push and they'll steal a run.",
-    "Beaten on the inside edge, scampered through for two.",
-    "Cracked through the gap for FOUR!",
-    "Heaves it over the ropes — that's a HUGE SIX!",
-    "Punched away to the off-side for a couple.",
-    "Late cut — racing to the boundary!",
-    "Tapped to midwicket for a quick single."
+    "Quick push and a run taken.",
+    "Good placement for a run.",
+    "Worked away for a couple.",
+    "Nice timing, they'll take two.",
+    "Smart running between the wickets.",
+    "Pushed away for a run."
 ]
 
 WICKET_TEMPLATES = [
     "Clean bowled! That's a beauty.",
-    "Caught behind — taken low and safe.",
+    "Caught — taken safely.",
     "LBW! The umpire raises his finger.",
-    "Edge and taken! Batsman has to walk.",
-    "Run out! A direct hit from the fielder.",
-    "Stumped — beaten on the stride."
+    "Edge and taken — batsman walks.",
+    "Run out! Direct hit.",
+    "Stumped — beaten by the bowler."
 ]
 
 EXTRA_TEMPLATES = {
-    "WD": ["Wide down the leg side.", "The bowler strays down the leg — wide."],
-    "NB": ["No ball — free hit coming up!", "Overstepped! That's a no-ball."],
-    "BY": ["Byes! The ball races away.", "Byes run through the keeper's legs."],
-    "LB": ["Leg-bye, they'll run a couple.", "Leg-bye to the boundary!"]
+    "WD": ["Wide called — extra run.", "Wide ball."],
+    "NB": ["No ball — free hit coming!", "No ball — extra run awarded."],
+    "BY": ["Byes added to the total.", "Byes taken."],
+    "LB": ["Leg-byes taken.", "Leg-bye runs added."]
 }
 
 GENERIC_COMMENTS = [
-    "Good over, some tight bowling.",
+    "Good over, tight bowling.",
     "Pressure building on the batsman.",
-    "Crowd enjoying the contest.",
-    "That's a useful boundary for the batting side."
+    "Crowd enjoying the game.",
+    "That’s a useful run for the batting side."
 ]
 
 # ---------------- Helpers ----------------
@@ -276,26 +274,39 @@ def format_over_ball(total_balls):
     return f"{over_num}.{ball_in_over}"
 
 def pick_commentary(outcome, striker, bowler, extras=None):
+    """
+    Return a short commentary string prefixed by 'Bowler to Batsman — ...'
+    Rules:
+      - 'It's a HUGE SIX!' for outcome 6
+      - 'That's a FOUR!' for outcome 4
+      - 1/2/3 runs use generic RUN_TEMPLATES
+      - 0 run = dot ball message
+      - Wicket and extras use respective templates
+    """
     extras = extras or {}
-    text = ""
-    if outcome in ["0", "1", "2", "3", "4", "6"]:
-        if outcome == "4":
-            text = "Cracked through the gap for FOUR!"
-        elif outcome == "6":
-            text = "That's a massive SIX! Over the ropes."
-        else:
-            text = random.choice(RUN_TEMPLATES)
-    elif outcome in ["W", "Wicket"]:
+    striker = striker or "Batsman"
+    bowler = bowler or "Bowler"
+
+    if outcome == "6":
+        text = "It's a HUGE SIX!"
+    elif outcome == "4":
+        text = "That's a FOUR!"
+    elif outcome in ["1","2","3"]:
+        text = random.choice(RUN_TEMPLATES)
+    elif outcome == "0":
+        text = random.choice(["No runs. Dot ball.", "Tight bowling — dot ball."])
+    elif outcome in ["W","Wicket"]:
         text = random.choice(WICKET_TEMPLATES)
-    elif outcome in ["WD", "Wide"]:
+    elif outcome in ["WD","Wide"]:
         text = random.choice(EXTRA_TEMPLATES["WD"])
-    elif outcome in ["NB", "NoBall"]:
+    elif outcome in ["NB","NoBall"]:
         text = random.choice(EXTRA_TEMPLATES["NB"])
-    elif outcome in ["BY", "LB", "Bye", "LegBye"]:
+    elif outcome in ["BY","LB","Bye","LegBye"]:
         text = random.choice(EXTRA_TEMPLATES["BY"])
     else:
         text = random.choice(GENERIC_COMMENTS)
-    return f"{striker} vs {bowler} — {text}"
+
+    return f"{bowler} to {striker} — {text}"
 
 # ---------------- Scoring logic (with commentary) ----------------
 def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
@@ -782,6 +793,47 @@ if menu == "Live Scorer":
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
     st.write(f"**{bat}**: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
+# --- START: CrickPro-style Scorecard + Summary (Live Scorer) ---
+# Big scoreboard card
+overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
+rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
+
+st.markdown(f"""
+<div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
+  <div style='font-size:38px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
+  <div style='font-size:16px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
+
+# Player summary cards (Striker / Non-striker / Bowler)
+striker = state["batting"].get("striker","")
+non_striker = state["batting"].get("non_striker","")
+bowler = state["bowling"].get("current_bowler","")
+
+s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
+ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
+bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+
+st.markdown(f"""
+<div style='display:flex;gap:16px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>STRIKER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
+  </div>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
+  </div>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>BOWLER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+# --- END: CrickPro-style Scorecard + Summary (Live Scorer) ---
 
     # scorer lock
     user_mobile = normalize_mobile(cm["Mobile"])
@@ -884,6 +936,48 @@ if menu == "Live Score (Public)":
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
     st.write(f"{bat}: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
+    # --- START: CrickPro-style Scorecard + Summary (Live Scorer) ---
+# Big scoreboard card
+overs_decimal = sc["balls"]//6 + (sc["balls"]%6)/10
+rr = (sc["runs"]/(sc["balls"]/6)) if sc["balls"] else 0.0
+
+st.markdown(f"""
+<div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
+  <div style='font-size:38px;font-weight:900;'>{bat}: {sc['runs']}/{sc['wkts']}</div>
+  <div style='font-size:16px;margin-top:6px;'>Overs: {sc['balls']//6}.{sc['balls']%6} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
+
+# Player summary cards (Striker / Non-striker / Bowler)
+striker = state["batting"].get("striker","")
+non_striker = state["batting"].get("non_striker","")
+bowler = state["bowling"].get("current_bowler","")
+
+s_stats = state.get("batsman_stats", {}).get(striker, {"R":0,"B":0})
+ns_stats = state.get("batsman_stats", {}).get(non_striker, {"R":0,"B":0})
+bw_stats = state.get("bowler_stats", {}).get(bowler, {"B":0,"R":0,"W":0})
+
+st.markdown(f"""
+<div style='display:flex;gap:16px;justify-content:flex-start;margin:12px 0;flex-wrap:wrap;'>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>STRIKER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{striker or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{s_stats.get("R",0)} runs • {s_stats.get("B",0)} balls</div>
+  </div>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>NON-STRIKER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{non_striker or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{ns_stats.get("R",0)} runs • {ns_stats.get("B",0)} balls</div>
+  </div>
+  <div style='background:#f8fafc;padding:12px;border-radius:10px;min-width:220px;'>
+    <div style='font-size:12px;color:#555;'>BOWLER</div>
+    <div style='font-size:18px;font-weight:700;margin-top:6px;'>{bowler or "-"}</div>
+    <div style='font-size:13px;color:#333;margin-top:6px;'>{bw_stats.get("B",0)//6}.{bw_stats.get("B",0)%6} overs • {bw_stats.get("R",0)} runs • {bw_stats.get("W",0)} wkts</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+# --- END: CrickPro-style Scorecard + Summary (Live Scorer) ---
+
     st.markdown("### Last balls")
     mems_df = read_members()
     for e in state.get("balls_log", [])[-12:][::-1]:
