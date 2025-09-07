@@ -92,7 +92,13 @@ def save_json(path, obj):
         os.replace(tmp, path)
     except:
         os.rename(tmp, path)
-
+# Safe rerun helper: experimental_rerun can sometimes raise in some environments
+def safe_rerun():
+    try:
+        safe_rerun()
+    except Exception:
+        # swallow exceptions so UI doesn't break
+        return
 # ---------------- Members ----------------
 def ensure_members_file():
     if not os.path.exists(MEMBERS_CSV):
@@ -605,7 +611,7 @@ else:
         st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
     if st.sidebar.button("Logout"):
         st.session_state.pop("MemberID", None)
-        st.experimental_rerun()
+        safe_rerun()
     st.sidebar.info("Guest — go to Menu → Login / Register")
 
 # ---------------- Menu (sidebar) ----------------
@@ -635,7 +641,7 @@ if menu == "Login / Register":
                         st.success(f"Logged in as {row['Name']} ({row['MemberID']}) — Paid ✔️")
                     else:
                         st.success(f"Logged in as {row['Name']} ({row['MemberID']}) — Not Verified")
-                    st.experimental_rerun()
+                    safe_rerun()
                 else:
                     st.info("Mobile not registered. Please register below.")
     with col2:
@@ -666,7 +672,7 @@ if menu == "Login / Register":
                         save_member_photo(nid, rphoto)
                     st.success(f"Registered. Member ID: {nid}")
                     st.session_state["MemberID"] = nid
-                    st.experimental_rerun()
+                    safe_rerun()
 
 # ---------------- Match Setup ----------------
 if menu == "Match Setup":
