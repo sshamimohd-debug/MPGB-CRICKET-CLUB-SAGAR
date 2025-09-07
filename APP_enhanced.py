@@ -1,5 +1,5 @@
 # APP_enhanced.py
-# MPGB Cricket Scoring - Full final (ID download, paid-sync, logo, friendly UI, overs.ball & commentary)
+# MPGB Cricket Scoring - Enhanced (embed, export, backup, blue theme)
 # सब comments हिन्दी में
 
 import streamlit as st
@@ -24,9 +24,11 @@ PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")
 MATCH_INDEX = os.path.join(DATA_DIR, "matches_index.json")
 ADMIN_PHONE = "8931883300"  # admin mobile only
 LOGO_PATH = os.path.join(DATA_DIR, "logo.png")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # ---------------- Commentary templates (English) ----------------
 RUN_TEMPLATES = [
@@ -190,10 +192,6 @@ def is_mobile_paid(mobile):
     return m in paid["Mobile_No"].tolist()
 
 def sync_paid_with_registry():
-    """
-    Read Members_Paid.csv and update members.csv Paid='Y' where mobile matches.
-    Returns: dict {updated_count: int, unmatched: [mobiles]}
-    """
     paid_df = read_paid_list()
     mems = read_members()
     if paid_df.empty:
@@ -201,14 +199,12 @@ def sync_paid_with_registry():
     paid_set = set(paid_df["Mobile_No"].tolist())
     updated = 0
     unmatched = []
-    # mark Paid=Y for matching registry members
     for idx, row in mems.iterrows():
         mob = normalize_mobile(row.get("Mobile", ""))
         if mob and mob in paid_set:
             if mems.at[idx, "Paid"] != "Y":
                 mems.at[idx, "Paid"] = "Y"
                 updated += 1
-    # find paid mobiles not in registry
     reg_mobs = set(mems["Mobile"].apply(normalize_mobile).tolist())
     for p in paid_set:
         if p not in reg_mobs:
@@ -228,6 +224,13 @@ def match_state_path(mid):
 
 def save_match_state(mid, state):
     save_json(match_state_path(mid), state)
+    # backup copy for safety
+    try:
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        backup_path = os.path.join(BACKUP_DIR, f"match_{mid}_state_backup_{ts}.json")
+        save_json(backup_path, state)
+    except:
+        pass
 
 def load_match_state(mid):
     return load_json(match_state_path(mid), {})
@@ -409,6 +412,41 @@ def undo_last_ball_full(state, mid):
     save_match_state(mid, state)
     return True
 
+# ---------------- Extra features: export, end innings, embed ----------------
+def export_match_json(state):
+    b = json.dumps(state, indent=2, ensure_ascii=False).encode("utf-8")
+    return b
+
+def export_match_csv(state):
+    # Flatten balls_log to CSV
+    rows = []
+    for b in state.get("balls_log", []):
+        rows.append({
+            "time": b.get("time"),
+            "outcome": b.get("outcome"),
+            "striker": b.get("striker"),
+            "non_striker": b.get("non_striker"),
+            "bowler": b.get("bowler"),
+            "extras": json.dumps(b.get("extras", {}), ensure_ascii=False),
+            "wicket": json.dumps(b.get("wicket", {}), ensure_ascii=False)
+        })
+    df = pd.DataFrame(rows)
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    return csv_bytes
+
+def end_innings(state):
+    # switch innings or mark finished
+    if state.get("status") == "INNINGS1":
+        state["status"] = "INNINGS2"
+        state["innings"] = 2
+        state["bat_team"] = "Team B" if state["bat_team"] == "Team A" else "Team A"
+        # reset batting order to whatever was defined
+        state["batting"]["striker"] = state["teams"][state["bat_team"]][0] if state["teams"][state["bat_team"]] else ""
+        state["batting"]["non_striker"] = state["teams"][state["bat_team"]][1] if len(state["teams"][state["bat_team"]])>1 else ""
+    else:
+        state["status"] = "COMPLETED"
+    return state
+
 # ---------------- Scorer lock ----------------
 def try_acquire_scorer_lock(state, mid, phone):
     lock = state.get("scorer_lock", {})
@@ -437,14 +475,9 @@ def release_scorer_lock(state, mid, phone):
 
 # ---------------- ID card generation ----------------
 def generate_id_card_image(member):
-    """
-    member: dict with MemberID, Name, Mobile, Paid
-    returns bytes PNG
-    """
     W, H = 600, 360
     bg = Image.new("RGB", (W, H), color=(255, 255, 255))
     draw = ImageDraw.Draw(bg)
-    # fonts: try to load default PIL fonts (if system has more fonts you can specify)
     try:
         font_bold = ImageFont.truetype("arial.ttf", 28)
         font_med = ImageFont.truetype("arial.ttf", 20)
@@ -454,7 +487,6 @@ def generate_id_card_image(member):
         font_med = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    # Logo left top (if exists)
     if os.path.exists(LOGO_PATH):
         try:
             logo = Image.open(LOGO_PATH).convert("RGBA")
@@ -463,7 +495,6 @@ def generate_id_card_image(member):
         except:
             pass
 
-    # Photo circle
     photo = None
     ppath = get_member_photo_path(member.get("MemberID"))
     if ppath:
@@ -472,21 +503,17 @@ def generate_id_card_image(member):
             photo.thumbnail((160,160))
         except:
             photo = None
-    # draw placeholders
+
     draw.rectangle([150, 20, W-20, 120], outline=(200,200,200), width=1)
 
-    # place photo
     if photo:
         box = (30, 140, 190, 300)
-        # paste centered
         ph = photo.resize((160,160))
         bg.paste(ph, (30, 140))
     else:
-        # placeholder circle
         draw.ellipse([30,140,190,300], outline=(120,120,120), width=2)
         draw.text((70,200), "No Photo", font=font_small, fill=(120,120,120))
 
-    # Text fields
     x = 210
     y = 140
     draw.text((x, y), f"Member ID: {member.get('MemberID','-')}", font=font_med, fill=(0,0,0))
@@ -495,7 +522,6 @@ def generate_id_card_image(member):
     paid_text = "PAID" if str(member.get("Paid","N")).upper()=="Y" else "NOT PAID"
     draw.text((x, y+90), f"Status: {paid_text}", font=font_med, fill=(0,0,0))
 
-    # footer
     draw.text((20, H-30), "MPGB Cricket Club - Sagar", font=font_small, fill=(50,50,50))
     draw.text((W-250, H-30), "(An official group of Madhya Pradesh Gramin Bank)", font=font_small, fill=(80,80,80))
 
@@ -506,9 +532,39 @@ def generate_id_card_image(member):
 
 # ---------------- UI & Pages ----------------
 st.set_page_config(page_title="MPGB Scoring - Sagar", layout="wide")
+# check embed mode param
+qp = st.experimental_get_query_params()
+EMBED_MODE = qp.get("embed", ["0"])[0] in ["1","true","True"]
+
+# If embed mode, show minimal scoreboard and return
+if EMBED_MODE:
+    # Expect a match id param ?mid=<id>
+    mid = qp.get("mid", [""])[0]
+    if not mid:
+        st.write("Embed mode: pass ?mid=<match_id> & ?embed=1")
+        st.stop()
+    state = load_match_state(mid)
+    if not state:
+        st.write("Match not found")
+        st.stop()
+    bat = state.get("bat_team","Team A")
+    sc = state["score"][bat]
+    # Minimal CSS for OBS: transparent background recommended on host
+    st.markdown("""
+    <style>
+    body { background: transparent; }
+    .emb { font-family: Arial, sans-serif; color: #0b6efd; background: rgba(255,255,255,0.0); padding:8px; }
+    .team { font-size:20px; font-weight:700; }
+    .score { font-size:48px; font-weight:800; }
+    .small { font-size:14px; color:#333; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown(f"<div class='emb'><div class='team'>{state.get('title')}</div><div class='score'>{bat}: {sc['runs']}/{sc['wkts']}</div><div class='small'>Overs: {format_over_ball(sc.get('balls',0))}</div></div>", unsafe_allow_html=True)
+    st.stop()
+
 st.markdown("""
 <style>
-.header { background: linear-gradient(90deg,#0b8457,#0b572c); color:#fff; padding:12px; border-radius:8px; margin-bottom:10px; }
+.header { background: linear-gradient(90deg,#0b6efd,#055ecb); color:#fff; padding:12px; border-radius:8px; margin-bottom:10px; }
 .ball-chip { padding:6px 10px; border-radius:999px; background:#f3f4f6; display:inline-block; margin-right:6px; }
 .big-btn { padding:12px 18px; font-size:18px; border-radius:10px; }
 .small-muted { color:#666; font-size:13px; }
@@ -534,7 +590,6 @@ if st.sidebar.button("Login with Mobile"):
         else:
             st.sidebar.info("Mobile not registered. Please register below.")
 
-# immediate paid preview
 if mobile_input:
     if is_mobile_paid(mobile_input):
         st.sidebar.success("Status: VERIFIED — membership paid ✔️")
@@ -576,7 +631,6 @@ with col2:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH, width=90)
     else:
-        # optional fallback: try raw github url if you want; else text
         st.markdown("<div class='small-muted'>MPGB</div>", unsafe_allow_html=True)
 
 # ---------------- Current member helper & roles ----------------
@@ -612,10 +666,8 @@ if mem:
     ppath = get_member_photo_path(mem.get("MemberID"))
     if ppath:
         st.sidebar.image(ppath, width=120)
-    # ID download button
     id_bytes = generate_id_card_image(mem)
     st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
-    # small edit options
     if st.sidebar.button("Edit name/photo"):
         with st.sidebar.form("edit_profile", clear_on_submit=False):
             new_name = st.text_input("New name", value=mem.get("Name"))
@@ -725,7 +777,7 @@ if menu == "Live Scorer":
     st.markdown(f"## {matches[mid]['title']} — Scoring")
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
-    st.write(f"**{bat}**: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
+    st.write(f"**{bat}**: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls) — Status: {state.get('status')}")
 
     # scorer lock
     user_mobile = normalize_mobile(cm["Mobile"])
@@ -790,6 +842,24 @@ if menu == "Live Scorer":
         else:
             st.warning("No ball to undo")
 
+    # End innings / End match / Export
+    c1, c2, c3 = st.columns([1,1,1])
+    if c1.button("End Innings"):
+        state = end_innings(state)
+        save_match_state(mid, state)
+        st.success("Innings switched/ended"); st.rerun()
+    if c2.button("End Match"):
+        state["status"] = "COMPLETED"
+        save_match_state(mid, state)
+        st.success("Match marked completed"); st.rerun()
+    if c3.button("Download Match JSON"):
+        data = export_match_json(state)
+        st.download_button("Download JSON", data=data, file_name=f"match_{mid}.json", mime="application/json")
+
+    # CSV export
+    csv_bytes = export_match_csv(state)
+    st.download_button("Download Ball Log CSV", data=csv_bytes, file_name=f"match_{mid}_balls.csv", mime="text/csv")
+
     # last balls with photo & name
     st.markdown("### Last 12 balls")
     mems_df = read_members()
@@ -810,7 +880,7 @@ if menu == "Live Scorer":
         c2.write(f"**{display}** — {out} — {b}")
 
     st.markdown("### Commentary (recent)")
-    for txt in state.get("commentary", [])[-10:][::-1]:
+    for txt in state.get("commentary", [])[-20:][::-1]:
         st.write(txt)
 
 # ---------------- Live Score (Public) ----------------
@@ -828,6 +898,11 @@ if menu == "Live Score (Public)":
     bat = state.get("bat_team","Team A")
     sc = state["score"][bat]
     st.write(f"{bat}: {sc['runs']}/{sc['wkts']} ({sc['balls']} balls)")
+    # Provide embed link here for ease
+    base_url = st.runtime.scriptrunner.get_script_run_ctx().session_id if False else ""  # fallback
+    # show embed instructions / link
+    st.markdown("**Embed for OBS:** add `?mid={mid}&embed=1` to app URL to get minimal overlay (transparent).".replace("{mid}", mid))
+
     st.markdown("### Last balls")
     mems_df = read_members()
     for e in state.get("balls_log", [])[-12:][::-1]:
@@ -921,7 +996,7 @@ if menu == "Admin":
         res = sync_paid_with_registry()
         st.success(f"Sync done. {res['updated_count']} registry members updated. {len(res['unmatched'])} unmatched mobiles.")
         if res["unmatched"]:
-            st.warning("Unmatched examples: " + ", ".join(res["unmatched"][:10]))
+            st.warning("Unmatched examples: " + ", ".join(res['unmatched'][:10]))
 
     st.markdown("### Paid list preview (with registry match)")
     paid_df = read_paid_list(); mems = read_members()
@@ -936,4 +1011,4 @@ if menu == "Admin":
 
 # ---------------- Footer ----------------
 st.markdown("---")
-st.markdown("Note: Login by mobile only. Admin mobile is restricted. Photos stored in `data/photos/`.")
+st.markdown("Note: Login by mobile only. Admin mobile is restricted. Photos stored in `data/photos/`. To embed scoreboard in OBS use `?mid=<id>&embed=1`.")
