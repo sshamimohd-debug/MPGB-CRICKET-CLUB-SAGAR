@@ -986,9 +986,16 @@ if menu == "Live Scorer":
         else:
             for name, vals in bats.items():
                 sr = (vals.get('R',0)/max(1,vals.get('B',0)))*100 if vals.get('B',0)>0 else 0
-                st.markdown(f"<div class='small-card'>
-  <div class='batsman-row'><div><strong>{name}</strong><div style='font-size:12px'>R: {vals.get('R',0)} • B: {vals.get('B',0)} • 4s: {vals.get('4',0)} • 6s: {vals.get('6',0)}</div></div><div style='font-weight:800'>{sr:.1f}</div></div>
-</div>", unsafe_allow_html=True)
+                st.markdown(f"""
+<div class='small-card'>
+  <div style='padding:6px'>
+    <strong>{name}</strong>
+    <div style='font-size:12px'>
+      O: {format_over_ball(vals.get('B',0))} • R: {vals.get('R',0)} • W: {vals.get('W',0)}
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
         st.markdown("---")
         st.subheader("Bowlers")
