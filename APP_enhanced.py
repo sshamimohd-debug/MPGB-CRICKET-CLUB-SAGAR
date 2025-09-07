@@ -606,7 +606,6 @@ else:
     if st.sidebar.button("Logout"):
         st.session_state.pop("MemberID", None)
         st.experimental_rerun()
-else:
     st.sidebar.info("Guest — go to Menu → Login / Register")
 
 # ---------------- Menu (sidebar) ----------------
