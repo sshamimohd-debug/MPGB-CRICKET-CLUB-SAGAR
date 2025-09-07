@@ -831,11 +831,20 @@ if menu == "Live Scorer":
 
     col1, col2 = st.columns([2,1])
     with col1:
-        st.markdown(f"<div class='score-card'>
+        st.markdown(f"""
+<div class='score-card'>
   <div style='font-size:24px;font-weight:900'>{state.get('title','Match')}</div>
-  <div style='font-size:20px;margin-top:8px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:22px'>{sc.get('wkts',0)}</span></div>
-  <div style='font-size:13px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}</div>
-</div>", unsafe_allow_html=True)
+  <div style='font-size:20px;margin-top:8px'>{bat}: 
+      <span style='font-size:28px'>{sc.get('runs',0)}</span>/
+      <span style='font-size:22px'>{sc.get('wkts',0)}</span>
+  </div>
+  <div style='font-size:13px;margin-top:6px'>
+      Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; 
+      RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
         st.markdown(f"<div style='margin-top:8px' class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
 
         # If innings 1 completed show innings break summary
