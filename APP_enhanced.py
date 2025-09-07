@@ -767,10 +767,18 @@ if menu == "Match Setup":
 # Updated Live Scorer block with:
 # - Removed custom ball form
 # - Added last 12 previous balls section
-# - Auto-refresh enabled (every 5 seconds)
+# - Auto-refresh enabled (every 2 seconds)
+# Professional Live Scorer block — full features
+# - Quick actions (0,1,2,3,4,6, WD, NB, BY)
+# - Wicket form (type + new batsman)
+# - Innings break summary and Start Next Innings button
+# - Auto-refresh every 5s
+# - Full match end summary with result and automatic Man Of The Match
+# - Highlights: top scorer, top bowler, fours/sixes
+# - Last 12 balls, commentary, batsmen/bowlers cards
 
 if menu == "Live Scorer":
-    st.header("Live Scorer — MPGB (Enhanced UI)")
+    st.header("Live Scorer — MPGB (Professional)")
 
     st.markdown("""
     <style>
@@ -778,6 +786,7 @@ if menu == "Live Scorer":
     .small-card {background:#fff;padding:12px;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,0.06);}
     .btn-grid button{min-width:60px;height:44px;border-radius:8px;margin:3px;font-weight:700}
     .batsman-row{display:flex;justify-content:space-between;align-items:center;padding:8px 6px;border-bottom:1px solid #f1f5f9}
+    .highlight {background:#f8fafc;padding:12px;border-radius:10px;margin-bottom:8px}
     </style>
     """, unsafe_allow_html=True)
 
@@ -802,10 +811,19 @@ if menu == "Live Scorer":
         st.error("Match state लोड नहीं हो पाया — match state missing.")
         st.stop()
 
-    # Enable auto-refresh every 2s
+    # Auto-refresh
     if HAS_AUTORE:
         st_autorefresh(interval=2000, key=f"auto_{mid}")
 
+    # Derived helpers
+    def innings_summary(team):
+        s = state.get('score', {}).get(team, {"runs":0,"wkts":0,"balls":0})
+        return f"{team}: {s.get('runs',0)}/{s.get('wkts',0)} ({format_over_ball(s.get('balls',0))})"
+
+    def compute_rr(runs, balls):
+        return (runs/(balls/6)) if balls>0 else 0.0
+
+    # Show scoreboard / innings info
     bat = state.get("bat_team","Team A")
     sc = state.get("score", {}).get(bat, {"runs":0,"wkts":0,"balls":0})
     other = "Team A" if bat == "Team B" else "Team B"
@@ -813,8 +831,54 @@ if menu == "Live Scorer":
 
     col1, col2 = st.columns([2,1])
     with col1:
-        st.markdown(f"<div class='score-card'>\n  <div style='font-size:28px;font-weight:900'>{state.get('title','Match')}</div>\n  <div style='font-size:22px;margin-top:8px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:22px'>{sc.get('wkts',0)}</span></div>\n  <div style='font-size:14px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {((sc.get('runs',0)/(sc.get('balls',0)/6)) if sc.get('balls',0)>0 else 0):.2f}</div>\n</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='score-card'>
+  <div style='font-size:24px;font-weight:900'>{state.get('title','Match')}</div>
+  <div style='font-size:20px;margin-top:8px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:22px'>{sc.get('wkts',0)}</span></div>
+  <div style='font-size:13px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}</div>
+</div>", unsafe_allow_html=True)
         st.markdown(f"<div style='margin-top:8px' class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
+
+        # If innings 1 completed show innings break summary
+        if state.get('status') == 'INNINGS2':
+            st.markdown("<div class='highlight'><strong>Innings 1 Summary</strong><br/>" + innings_summary(other) + "</div>", unsafe_allow_html=True)
+            target = opp_sc.get('runs',0) + 1
+            balls_total = int(state.get('overs_limit',0))*6 if int(state.get('overs_limit',0))>0 else 0
+            st.markdown(f"<div class='highlight'>Target for {bat}: <strong>{target}</strong> in {balls_total} balls</div>", unsafe_allow_html=True)
+
+        if state.get('status') == 'COMPLETED':
+            # Show final full match summary and MOTM
+            st.markdown("<div class='highlight'><strong>Match Completed — Full Summary</strong></div>", unsafe_allow_html=True)
+            st.markdown(f"- {innings_summary('Team A')}<br/>- {innings_summary('Team B')}", unsafe_allow_html=True)
+
+            # Compute result
+            rA = state.get('score',{}).get('Team A',{}).get('runs',0)
+            rB = state.get('score',{}).get('Team B',{}).get('runs',0)
+            if rA == rB:
+                result = "Match Tied"
+            elif rA > rB:
+                result = f"Team A won by {rA-rB} runs"
+            else:
+                # if team batting when completed? use wickets/balls to compute
+                result = f"Team B won by {rB-rA} runs"
+            st.success(result)
+
+            # Automatic Man of the Match: simple metric (R + W*20)
+            motm = None
+            best_score = -1
+            # combine batsman and bowlers
+            for p, vals in state.get('batsman_stats',{}).items():
+                runs = vals.get('R',0)
+                metric = runs
+                if metric > best_score:
+                    best_score = metric; motm = p
+            for p, vals in state.get('bowler_stats',{}).items():
+                wk = vals.get('W',0)
+                metric = wk*20 + vals.get('R',0)
+                if metric > best_score:
+                    best_score = metric; motm = p
+            if motm:
+                st.info(f"Man of the Match (auto): {motm}")
+
     with col2:
         st.markdown("**Current Players**")
         br = state.get('batting',{})
@@ -828,6 +892,7 @@ if menu == "Live Scorer":
 
     st.markdown("---")
 
+    # Scorer lock
     lock = state.get('scorer_lock', {})
     locked_by = lock.get('locked_by')
     colA, colB = st.columns([1,1])
@@ -857,6 +922,7 @@ if menu == "Live Scorer":
         st.info("स्कोर करने से पहले Acquire Lock लें।")
         st.stop()
 
+    # Quick actions + wicket form
     left, right = st.columns([2,1])
     with left:
         st.subheader("Quick Actions")
@@ -871,7 +937,7 @@ if menu == "Live Scorer":
                     except Exception as e:
                         st.error(e)
 
-        ex1, ex2, ex3 = st.columns(3)
+        ex1, ex2, ex3, ex4 = st.columns(4)
         with ex1:
             if st.button("Wide (WD)"):
                 try:
@@ -890,6 +956,18 @@ if menu == "Live Scorer":
                     entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e:
                     st.error(e)
+        with ex4:
+            # show wicket expander
+            with st.expander("Wicket ⚠️"):
+                wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"])
+                newbat = st.text_input("New batsman (optional)")
+                if st.button("Record Wicket"):
+                    try:
+                        winfo = {'type': wtype}
+                        if newbat.strip(): winfo['new_batsman'] = newbat.strip()
+                        entry = record_ball_full(state, mid, 'W', wicket_info=winfo); save_match_state(mid, state); st.experimental_rerun()
+                    except Exception as e:
+                        st.error(e)
 
     with right:
         st.subheader("Batsmen")
@@ -898,7 +976,10 @@ if menu == "Live Scorer":
             st.info("No batsman data yet")
         else:
             for name, vals in bats.items():
-                st.markdown(f"<div class='small-card'>\n  <div class='batsman-row'><div><strong>{name}</strong><div style='font-size:12px'>R: {vals.get('R',0)} • B: {vals.get('B',0)} • 4s: {vals.get('4',0)} • 6s: {vals.get('6',0)}</div></div><div style='font-weight:800'>{( (vals.get('R',0)/max(1,vals.get('B',0)))*100 ):.1f}</div></div>\n</div>", unsafe_allow_html=True)
+                sr = (vals.get('R',0)/max(1,vals.get('B',0)))*100 if vals.get('B',0)>0 else 0
+                st.markdown(f"<div class='small-card'>
+  <div class='batsman-row'><div><strong>{name}</strong><div style='font-size:12px'>R: {vals.get('R',0)} • B: {vals.get('B',0)} • 4s: {vals.get('4',0)} • 6s: {vals.get('6',0)}</div></div><div style='font-weight:800'>{sr:.1f}</div></div>
+</div>", unsafe_allow_html=True)
 
         st.markdown("---")
         st.subheader("Bowlers")
@@ -916,15 +997,16 @@ if menu == "Live Scorer":
             st.info("No balls recorded yet.")
         else:
             for i, b in enumerate(last12, start=1):
-                st.markdown(f"{i}. {b.get('striker','-')} vs {b.get('bowler','-')} → {b.get('outcome','')} | Runs: {b.get('post_score',{}).get('runs','-')} / {b.get('post_score',{}).get('wkts','-')}")
+                st.markdown(f"{i}. {b.get('striker','-')} vs {b.get('bowler','-')} → {b.get('outcome','')} | Score: {b.get('post_score',{}).get('runs','-')} / {b.get('post_score',{}).get('wkts','-')}")
 
         st.markdown("---")
         st.subheader("Commentary")
         for txt in state.get('commentary', [])[-12:][::-1]:
             st.markdown(f"- {txt}")
 
+    # Bottom: actions, highlights, innings controls
     st.markdown("---")
-    f1, f2, f3 = st.columns(3)
+    f1, f2, f3, f4 = st.columns(4)
     with f1:
         if st.button("Undo Last Ball"):
             ok = undo_last_ball_full(state, mid)
@@ -941,8 +1023,52 @@ if menu == "Live Scorer":
             state['status'] = 'COMPLETED'
             save_match_state(mid, state)
             st.success("Match marked completed."); st.experimental_rerun()
+    with f4:
+        if st.button("Innings Break / Switch"):
+            # manually force innings switch (admin)
+            if state.get('status') == 'INNINGS1':
+                state['status'] = 'INNINGS2'
+                state['innings'] = 2
+                state['bat_team'] = 'Team B' if state.get('bat_team')=='Team A' else 'Team A'
+                save_match_state(mid, state)
+                st.experimental_rerun()
+            elif state.get('status') == 'INNINGS2':
+                state['status'] = 'COMPLETED'; save_match_state(mid, state); st.experimental_rerun()
 
+    # Highlights
+    st.markdown("---")
+    st.subheader("Match Highlights")
+    total_fours = sum([v.get('4',0) for v in state.get('batsman_stats',{}).values()])
+    total_sixes = sum([v.get('6',0) for v in state.get('batsman_stats',{}).values()])
+    top_scorer = None; top_runs = -1
+    for p, v in state.get('batsman_stats',{}).items():
+        if v.get('R',0) > top_runs:
+            top_runs = v.get('R',0); top_scorer = p
+    top_bowler = None; top_w = -1
+    for p, v in state.get('bowler_stats',{}).items():
+        if v.get('W',0) > top_w:
+            top_w = v.get('W',0); top_bowler = p
+
+    st.markdown(f"- Fours: {total_fours} • Sixes: {total_sixes}")
+    if top_scorer:
+        st.markdown(f"- Top scorer: {top_scorer} ({top_runs})")
+    if top_bowler:
+        st.markdown(f"- Top bowler: {top_bowler} ({top_w} wickets)")
+
+    # INNINGS2 target / required RR
+    if state.get('status') == 'INNINGS2':
+        other_team = 'Team A' if state.get('bat_team')=='Team B' else 'Team B'
+        other_runs = state.get('score',{}).get(other_team,{}).get('runs',0)
+        target = other_runs + 1
+        runs_needed = max(0, target - sc.get('runs',0))
+        balls_total = int(state.get('overs_limit',0))*6 if int(state.get('overs_limit',0))>0 else 0
+        balls_remaining = max(0, balls_total - sc.get('balls',0))
+        req_rr = (runs_needed/(balls_remaining/6)) if balls_remaining>0 else None
+        st.markdown(f"<div class='highlight'><strong>Target:</strong> {target} • <strong>Needed:</strong> {runs_needed} runs from {balls_remaining} balls" + (f" • Required RR: {req_rr:.2f}" if req_rr is not None else "") + "</div>", unsafe_allow_html=True)
+
+    # Save state
     save_match_state(mid, state)
+
 
 
 # ---------------- Player Stats ----------------
