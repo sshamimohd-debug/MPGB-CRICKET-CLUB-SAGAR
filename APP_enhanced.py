@@ -570,7 +570,37 @@ if mem:
     ppath = get_member_photo_path(mem.get("MemberID"))
     if ppath:
         st.sidebar.image(ppath, width=120)
-    id_bytes = io.BytesIO(generate_id_card_image(mem).getvalue()) if mem else None
+    # Safe creation of ID bytes (works even if generate_id_card_image missing or returns bytes/BytesIO)
+id_bytes = None
+if mem:
+    try:
+        buf = generate_id_card_image(mem)  # try to call
+        # if function returned a BytesIO-like object
+        if hasattr(buf, "getvalue"):
+            id_bytes = io.BytesIO(buf.getvalue())
+        else:
+            # if it returned raw bytes
+            id_bytes = io.BytesIO(buf)
+    except NameError:
+        # function not defined — create a small placeholder PNG bytes
+        placeholder = Image.new("RGB", (600,360), color=(255,255,255))
+        ph_draw = ImageDraw.Draw(placeholder)
+        ph_draw.text((20,20), f"MPGB ID\\n{mem.get('Name','-')}", fill=(0,0,0))
+        tmp = io.BytesIO()
+        placeholder.save(tmp, format="PNG")
+        tmp.seek(0)
+        id_bytes = tmp
+    except Exception as e:
+        # fallback placeholder on any other error
+        placeholder = Image.new("RGB", (600,360), color=(255,255,255))
+        ph_draw = ImageDraw.Draw(placeholder)
+        ph_draw.text((20,20), "ID generation error", fill=(0,0,0))
+        tmp = io.BytesIO()
+        placeholder.save(tmp, format="PNG")
+        tmp.seek(0)
+        id_bytes = tmp
+else:
+    id_bytes = NoneS
     if id_bytes:
         st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
     if st.sidebar.button("Logout"):
