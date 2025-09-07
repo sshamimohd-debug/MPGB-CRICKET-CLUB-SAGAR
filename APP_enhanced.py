@@ -879,7 +879,11 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
     # scorer lock & controls
-    user_mobile = normalize_mobile(cm["Mobile"]) if cm else ""
+    user_mobile = ""
+if cm and isinstance(cm, dict):
+    user_mobile = ""
+if cm and isinstance(cm, dict):
+    user_mobile = normalize_mobile(cm.get("Mobile", ""))
     lock = state.get("scorer_lock", {})
     lock_owner = lock.get("locked_by") if lock else None
 
