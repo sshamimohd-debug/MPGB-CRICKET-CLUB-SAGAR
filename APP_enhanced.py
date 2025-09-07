@@ -600,7 +600,7 @@ if mem:
         tmp.seek(0)
         id_bytes = tmp
 else:
-    id_bytes = NoneS
+    id_bytes = None
     if id_bytes:
         st.sidebar.download_button(label="Download ID Card (PNG)", data=id_bytes.getvalue(), file_name=f"{mem.get('MemberID')}_ID.png", mime="image/png")
     if st.sidebar.button("Logout"):
