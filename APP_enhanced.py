@@ -894,23 +894,30 @@ if menu == "Live Scorer":
         save_match_state(mid, state)
         safe_rerun()
 
-    # determine if over-change is required (i.e., last action finished an over)
+        # determine if over-change is required (i.e., last action finished an over)
     sc_now = state.get('score',{}).get(bat, {})
     over_needs_change = False
     if sc_now and sc_now.get('balls',0) > 0 and sc_now.get('balls',0) % 6 == 0:
+        # mark flag in state (persist) so other users know over-change required
         if not state.setdefault('bowling',{}).get('over_needs_change', False):
             state.setdefault('bowling',{})['over_needs_change'] = True
             save_match_state(mid, state)
         over_needs_change = True
     else:
-        state.setdefault('bowling',{})['over_needs_change'] = False
+        # clear flag if not an over boundary
+        if state.setdefault('bowling',{}).get('over_needs_change'):
+            state.setdefault('bowling',{})['over_needs_change'] = False
+            save_match_state(mid, state)
         over_needs_change = False
 
-    # If over change required, force bowler selection first
+    # If over change required, show bowler selector first
     if over_needs_change:
         st.warning("Over completed — कृपया नया गेंदबाज़ (Next Bowler) चुनें।")
         nb_col1, nb_col2 = st.columns([2,1])
+        # load fresh list each render
+        other_team_players = state.get('teams', {}).get(other, [])[:]
         with nb_col1:
+            # use a stable key including match id
             next_bowler = st.selectbox("Select next bowler", options=other_team_players, index=0, key=f"nextbowler_{mid}")
         with nb_col2:
             if st.button("Set Next Bowler", key=f"setnext_{mid}"):
@@ -918,16 +925,27 @@ if menu == "Live Scorer":
                     if not next_bowler or str(next_bowler).strip() == "":
                         st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
                     else:
+                        # set new bowler and clear over flag
                         last = state.get('bowling',{}).get('current_bowler','')
                         state.setdefault('bowling',{})['last_over_bowler'] = last
                         state.setdefault('bowling',{})['current_bowler'] = next_bowler
                         state.setdefault('bowling',{})['over_needs_change'] = False
                         save_match_state(mid, state)
-                        st.success(f"Next bowler set to {next_bowler}")
+
+                        # clear session keys that might cause stale selects
+                        try:
+                            for k in [f"nextbowler_{mid}", f"bowler_{mid}", f"striker_{mid}", f"nonstriker_{mid}"]:
+                                if k in st.session_state:
+                                    del st.session_state[k]
+                        except Exception:
+                            pass
+
+                        st.success(f"Next bowler set to {next_bowler}. Scoring resumed.")
+                        # safe rerun to refresh UI and show scoring controls
                         safe_rerun()
                 except Exception as e:
                     st.error(f"Failed to set next bowler: {e}")
-        st.stop()  # prevent new ball until new bowler set
+        # DO NOT call st.stop() here — after setting bowler we rerun and continue
 
     # Quick actions and wicket handling
     left, right = st.columns([2,1])
