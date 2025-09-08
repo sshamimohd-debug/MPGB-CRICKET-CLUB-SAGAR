@@ -998,31 +998,61 @@ if menu == "Live Scorer":
         with st.expander("Wicket ⚠️"):
             wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"], key=f"wtype_{mid}")
 
-            # --- CORRECT: compute candidates from CURRENT BATTING TEAM ---
-            # batting team name
+            # helper: smart compare (numbers => last10, else case-insensitive)
+            def same_player(a, b):
+                if not a or not b: return False
+                sa = str(a).strip()
+                sb = str(b).strip()
+                # if both contain digits, compare last 10 digits
+                if any(ch.isdigit() for ch in sa) and any(ch.isdigit() for ch in sb):
+                    da = "".join([c for c in sa if c.isdigit()])
+                    db = "".join([c for c in sb if c.isdigit()])
+                    if len(da) >= 10 and len(db) >= 10:
+                        return da[-10:] == db[-10:]
+                    return da == db
+                return sa.lower() == sb.lower()
+
+            # batting team (current)
             bat_team = state.get("bat_team", "Team A")
-            # batting order for the team currently batting
             bat_order = state.get('teams', {}).get(bat_team, [])[:]
-            # players currently on field (striker/non-striker)
+
+            # who is dismissed (most likely striker) — normalize via same_player
+            dismissed = state.get('batting',{}).get('striker','')
+
+            # on-field (striker, non-striker)
             on_field = [
                 state.get('batting',{}).get('striker',''),
                 state.get('batting',{}).get('non_striker','')
             ]
-            # mark players who have already batted (heuristic)
-            used = set()
-            for p, vals in state.get('batsman_stats', {}).items():
-                # if player has faced balls or scored runs then consider as already batted
-                if vals.get('B',0) > 0 or vals.get('R',0) > 0:
-                    used.add(p)
 
-            # candidates = players from batting order who are not already on field and not used
-            candidates = [p for p in bat_order if p not in on_field and p not in used]
+            # used players heuristic (already batted)
+            used_raw = [p for p,v in state.get('batsman_stats', {}).items() if (v.get('B',0)>0 or v.get('R',0)>0)]
+            # build candidates excluding: on_field, used, and the dismissed player
+            candidates = []
+            for p in bat_order:
+                # skip if p equals any on-field (including dismissed) or used
+                skip = False
+                for of in on_field:
+                    if same_player(p, of):
+                        skip = True; break
+                if skip:
+                    continue
+                for u in used_raw:
+                    if same_player(p, u):
+                        skip = True; break
+                if skip:
+                    continue
+                # extra guard: also skip if p is same as dismissed (to avoid showing the out batsman)
+                if same_player(p, dismissed):
+                    continue
+                # else candidate
+                candidates.append(p)
 
-            # fallback: if no candidates (e.g., order exhausted or names), allow any from batting order not on field
+            # fallback: if no candidates, allow any from batting order not currently on field
             if not candidates:
-                candidates = [p for p in bat_order if p not in on_field]
+                candidates = [p for p in bat_order if not any(same_player(p, of) for of in on_field)]
 
-            # final fallback: empty list -> let scorer type a name
+            # final fallback: allow free-text entry
             if candidates:
                 newbat = st.selectbox("New batsman (required)", options=candidates, key=f"newbat_{mid}")
             else:
