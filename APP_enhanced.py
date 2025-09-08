@@ -1,5 +1,5 @@
 # APP_enhanced.py - FINAL (MPGB Cricket Club - Sagar)
-# Consolidated, patched version with safer rerun, backup-throttle, compact UI, public view fixes.
+# Features: CrickPro-like scorer, commentary rules, autosave, auto innings end, MOTM etc.
 
 import os, io, json, uuid, random
 from datetime import datetime, timedelta
@@ -22,14 +22,7 @@ PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")
 MATCH_INDEX = os.path.join(DATA_DIR, "matches_index.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 ADMIN_PHONE = "8931883300"  # change if needed
-
-# Logo path: flexible (data/logo.png preferred, else fallback to repo root logo.png)
-_possible_paths = [
-    os.path.join(DATA_DIR, "logo.png"),
-    os.path.join(os.getcwd(), "logo.png"),
-    os.path.join(os.path.dirname(__file__), "logo.png"),
-]
-LOGO_PATH = next((p for p in _possible_paths if os.path.exists(p)), _possible_paths[0])
+LOGO_PATH = os.path.join(DATA_DIR, "logo.png")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_DIR, exist_ok=True)
@@ -125,6 +118,32 @@ def format_over_ball(total_balls):
     ball_in_over = total_balls % 6
     return f"{over_num}.{ball_in_over}"
 
+# Robust player comparison helper (used in wicket/new batsman logic)
+def same_player(a, b):
+    """Robust compare: names or mobile numbers (compare last 10 digits if digits present)."""
+    if not a or not b:
+        return False
+    sa = str(a).strip()
+    sb = str(b).strip()
+    if any(ch.isdigit() for ch in sa) and any(ch.isdigit() for ch in sb):
+        da = "".join([c for c in sa if c.isdigit()])
+        db = "".join([c for c in sb if c.isdigit()])
+        if len(da) >= 10 and len(db) >= 10:
+            return da[-10:] == db[-10:]
+        return da == db
+    return sa.lower() == sb.lower()
+
+def player_team(state, player_name):
+    """Return team name ('Team A'/'Team B' or None) for a given player using state['teams']."""
+    if not player_name:
+        return None
+    teams = state.get("teams", {})
+    for tname, members in teams.items():
+        for m in members:
+            if same_player(m, player_name):
+                return tname
+    return None
+
 # ---------------- Files: members, paid, matches ----------------
 def ensure_members_file():
     if not os.path.exists(MEMBERS_CSV):
@@ -150,10 +169,7 @@ def write_members(df):
         df2 = df.copy()
         df2.to_csv(MEMBERS_CSV, index=False)
     except Exception as e:
-        try:
-            st.error(f"Error saving members: {e}")
-        except:
-            pass
+        st.error(f"Error saving members: {e}")
 
 def next_member_id():
     df = read_members()
@@ -189,10 +205,7 @@ def write_paid_list(df):
         df2["Mobile_No"] = df2["Mobile_No"].apply(normalize_mobile)
         df2.to_csv(PAID_CSV, index=False)
     except Exception as e:
-        try:
-            st.error(f"Failed to write paid list: {e}")
-        except:
-            pass
+        st.error(f"Failed to write paid list: {e}")
 
 def sync_paid_with_registry():
     paid_df = read_paid_list()
@@ -225,35 +238,12 @@ def save_matches_index(idx):
 def match_state_path(mid):
     return os.path.join(DATA_DIR, f"match_{mid}_state.json")
 
-# save_match_state with throttled backups
 def save_match_state(mid, state):
     save_json(match_state_path(mid), state)
     try:
-        # Throttle backups: only write full backup at most every 5 minutes or on match completion
-        now = datetime.utcnow()
-        last = state.get("_last_backup_ts")
-        do_backup = False
-        if state.get("status") == "COMPLETED":
-            do_backup = True
-        elif not last:
-            do_backup = True
-        else:
-            try:
-                last_dt = datetime.fromisoformat(last)
-                if (now - last_dt) > timedelta(minutes=5):
-                    do_backup = True
-            except:
-                do_backup = True
-        if do_backup:
-            ts = now.strftime("%Y%m%dT%H%M%SZ")
-            try:
-                save_json(os.path.join(BACKUP_DIR, f"match_{mid}_backup_{ts}.json"), state)
-                state["_last_backup_ts"] = now.isoformat()
-                # update main match state again with timestamp
-                save_json(match_state_path(mid), state)
-            except:
-                pass
-    except Exception:
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        save_json(os.path.join(BACKUP_DIR, f"match_{mid}_backup_{ts}.json"), state)
+    except:
         pass
 
 def load_match_state(mid):
@@ -271,7 +261,7 @@ def init_match_state_full(mid, title, overs, teamA, teamB, venue=""):
         "teams": {"Team A": teamA, "Team B": teamB},
         "score": {"Team A": {"runs": 0, "wkts": 0, "balls": 0}, "Team B": {"runs": 0, "wkts": 0, "balls": 0}},
         "batting": {"striker": teamA[0] if len(teamA)>0 else "", "non_striker": teamA[1] if len(teamA)>1 else "", "order": teamA[:], "next_index": 2},
-        "bowling": {"current_bowler": "", "last_over_bowler": "", "over_needs_change": False},
+        "bowling": {"current_bowler": "", "last_over_bowler": ""},
         "batsman_stats": {},
         "bowler_stats": {},
         "balls_log": [],
@@ -318,30 +308,110 @@ def safe_rerun():
     except Exception:
         return
 
-# ---------------- ID card generation ----------------
-def generate_id_card_image(member):
-    w, h = 600, 360
-    img = Image.new("RGB", (w,h), color=(255,255,255))
-    draw = ImageDraw.Draw(img)
+# ---------------- Finalize / Summary helpers ----------------
+def compute_man_of_match(state):
+    """
+    Simple heuristic:
+      - batsman score weight = runs
+      - bowler score weight = wickets*25 + negative runs concession
+    """
+    best = None
+    best_score = -10**9
+    # batsmen
+    for p,vals in state.get("batsman_stats", {}).items():
+        runs = int(vals.get("R",0) or 0)
+        score = runs
+        if score > best_score:
+            best_score = score; best = p
+    # bowlers
+    for p,vals in state.get("bowler_stats", {}).items():
+        wk = int(vals.get("W",0) or 0)
+        runs_conceded = int(vals.get("R",0) or 0)
+        score = wk * 25 - (runs_conceded//10)
+        if score > best_score:
+            best_score = score; best = p
+    return best or state.get("man_of_match_override","")
+
+def save_final_scorecard_files(mid, state):
+    """Save JSON and CSV snapshot in backups dir and return paths."""
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    base = os.path.join(BACKUP_DIR, f"match_{mid}_final_{ts}")
+    json_path = base + ".json"
+    csv_path = base + ".csv"
+    # JSON
+    save_json(json_path, state)
+    # CSV (balls_log to flat csv)
+    rows = []
+    for b in state.get("balls_log", []):
+        rows.append({
+            "time": b.get("time"),
+            "outcome": b.get("outcome"),
+            "striker": b.get("striker"),
+            "non_striker": b.get("non_striker"),
+            "bowler": b.get("bowler"),
+            "extras": json.dumps(b.get("extras", {}), ensure_ascii=False),
+            "wicket": json.dumps(b.get("wicket", {}), ensure_ascii=False),
+            "prev_runs": b.get("prev_score", {}).get("runs"),
+            "post_runs": b.get("post_score", {}).get("runs")
+        })
     try:
-        f_b = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
-        f_m = ImageFont.truetype("DejaVuSans.ttf", 16)
-    except:
-        f_b = ImageFont.load_default()
-        f_m = ImageFont.load_default()
-    draw.rectangle([20,20,100,100], fill=(11,110,253))
-    draw.text((28,42), "MPGB", fill=(255,255,255), font=f_b)
-    nm = member.get("Name","-")
-    mob = member.get("Mobile","-")
-    mid = member.get("MemberID","-")
-    draw.text((130,30), nm, fill=(0,0,0), font=f_b)
-    draw.text((130,70), f"ID: {mid}", fill=(0,0,0), font=f_m)
-    draw.text((130,100), f"Mobile: {mob}", fill=(0,0,0), font=f_m)
-    draw.text((20,130), "MPGB Cricket Club - Sagar", fill=(0,0,0), font=f_m)
-    out = io.BytesIO()
-    img.save(out, format="PNG")
-    out.seek(0)
-    return out
+        df = pd.DataFrame(rows)
+        df.to_csv(csv_path, index=False)
+    except Exception:
+        pass
+    return json_path, csv_path
+
+def finalize_match(mid, state):
+    """
+    Called when a match ends. Computes result, MOTM, saves files, updates matches index.
+    """
+    # compute final result
+    if state.get("status") != "COMPLETED":
+        state["status"] = "COMPLETED"
+    ta = "Team A"; tb = "Team B"
+    ra = int(state.get("score", {}).get(ta, {}).get("runs", 0) or 0)
+    rb = int(state.get("score", {}).get(tb, {}).get("runs", 0) or 0)
+    wa = int(state.get("score", {}).get(ta, {}).get("wkts", 0) or 0)
+    wb = int(state.get("score", {}).get(tb, {}).get("wkts", 0) or 0)
+
+    result_text = ""
+    if ra == rb:
+        result_text = "Match tied"
+    else:
+        # determine by runs/wickets
+        if ra > rb:
+            margin = ra - rb
+            result_text = f"Team A won by {margin} runs"
+        else:
+            # Team B won — compute wickets remaining (approx)
+            teamA_players = state.get("teams", {}).get("Team A", [])
+            team_size = max(0, len(teamA_players))
+            wkts_fallen = state.get("score", {}).get("Team B", {}).get("wkts", 0)
+            wickets_remaining = max(0, team_size - 1 - wkts_fallen)
+            result_text = f"Team B won by {wickets_remaining} wickets"
+
+    motm_auto = compute_man_of_match(state)
+    state["man_of_match_auto"] = motm_auto
+
+    summary = {
+        "result_text": result_text,
+        "runs": {"Team A": ra, "Team B": rb},
+        "wkts": {"Team A": wa, "Team B": wb},
+        "man_of_match_auto": motm_auto,
+        "completed_at": datetime.utcnow().isoformat()
+    }
+    state["final_summary"] = summary
+
+    jpath, cpath = save_final_scorecard_files(mid, state)
+
+    idx = load_matches_index()
+    if mid in idx:
+        idx[mid]["completed_at"] = summary["completed_at"]
+        idx[mid]["final_summary_brief"] = {"result": result_text, "motm": motm_auto}
+        save_matches_index(idx)
+
+    save_match_state(mid, state)
+    return summary
 
 # ---------------- Scoring function ----------------
 def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
@@ -476,6 +546,7 @@ def record_ball_full(state, mid, outcome, extras=None, wicket_info=None):
             state["status"] = "INNINGS2"
             state["innings"] = 2
             state["bat_team"] = "Team B" if state.get("bat_team") == "Team A" else "Team A"
+            # do not auto set striker; scorer should set players
         else:
             state["status"] = "COMPLETED"
 
@@ -801,82 +872,126 @@ if menu == "Live Scorer":
 
     st.markdown("""
     <style>
-    /* compact styling */
-    .score-card {color:white;padding:12px;border-radius:10px;}
-    .small-card {background:#fff;padding:8px;border-radius:8px;box-shadow:0 6px 14px rgba(2,6,23,0.06);margin-bottom:6px;}
-    .batsman-row{display:flex;justify-content:space-between;align-items:center;padding:6px 4px;border-bottom:1px solid #f1f5f9}
-    .btn-compact {min-width:56px; height:40px; border-radius:8px; font-weight:700}
-    .extras-row {margin-top:8px; display:flex; gap:8px;}
-    .right-block {padding-left:6px;}
+    .score-card {background: linear-gradient(90deg,#0b6efd,#055ecb);color:white;padding:18px;border-radius:12px;}
+    .small-card {background:#fff;padding:12px;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,0.06);}
+    .btn-grid button{min-width:60px;height:44px;border-radius:8px;margin:3px;font-weight:700}
+    .batsman-row{display:flex;justify-content:space-between;align-items:center;padding:8px 6px;border-bottom:1px solid #f1f5f9}
     </style>
     """, unsafe_allow_html=True)
 
     cm = current_member()
     if not cm:
-        st.warning("पहले Login करें (Sidebar → Login).")
+        st.warning("स्कोर करने के लिए पहले login करें (Sidebar → Login).")
         st.stop()
 
     role = "admin" if normalize_mobile(cm.get("Mobile","")) == normalize_mobile(ADMIN_PHONE) else ("member" if is_mobile_paid(cm.get("Mobile","")) else "guest")
     if role not in ["member","admin"]:
-        st.warning("Scoring के लिए paid member होना अनिवार्य है।")
+        st.warning("Scoring के लिए paid member होना ज़रूरी है.")
         st.stop()
 
     matches = load_matches_index()
     if not matches:
-        st.info("कोई मैच उपलब्ध नहीं — पहले Match Setup में मैच बनाइए.")
+        st.info("कोई मैच उपलब्ध नहीं है — पहले Match Setup में मैच बनाइए.")
         st.stop()
 
-    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}", key=f"matchsel_{st.session_state.get('MemberID','')}")
+    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
     state = load_match_state(mid)
     if not state:
-        st.error("Match state missing / load failed.")
+        st.error("Match state लोड नहीं हो पाया — match state missing.")
         st.stop()
 
-    # Auto refresh (requires streamlit-autorefresh installed)
+    # Auto-refresh every 25s (for viewers) — scorer actions call safe_rerun()
     if HAS_AUTORE:
-        st_autorefresh(interval=5000, key=f"auto_{mid}")
+        st_autorefresh(interval=25000, key=f"auto_{mid}")
 
-    # helpers
-    def innings_summary(team):
-        s = state.get('score', {}).get(team, {"runs":0,"wkts":0,"balls":0})
-        return f"{team}: {s.get('runs',0)}/{s.get('wkts',0)} ({format_over_ball(s.get('balls',0))})"
-    def compute_rr(runs, balls):
-        return (runs/(balls/6)) if balls>0 else 0.0
-
-    # team colours (customize if needed)
-    TEAM_A_COLOR = "#0b6efd"
-    TEAM_B_COLOR = "#10b981"
-    teamA_name = "Team A"
-    teamB_name = "Team B"
-
-    # current batting team
-    bat = state.get("bat_team", teamA_name)
+    bat = state.get("bat_team","Team A")
     sc = state.get("score", {}).get(bat, {"runs":0,"wkts":0,"balls":0})
-    other = teamA_name if bat == teamB_name else teamB_name
+    other = "Team A" if bat == "Team B" else "Team B"
     opp_sc = state.get("score", {}).get(other, {"runs":0,"wkts":0,"balls":0})
 
-    # choose colour based on batting team
-    theme_color = TEAM_A_COLOR if bat == teamA_name else TEAM_B_COLOR
+    # If match completed show final scorecard and downloads
+    if state.get("status") == "COMPLETED":
+        st.success("Match completed — final scorecard available.")
+        fs = state.get("final_summary", {})
+        if fs:
+            st.markdown(f"**Result:** {fs.get('result_text','')}")
+            motm = fs.get("man_of_match_auto") or state.get("man_of_match_override","")
+            if motm:
+                st.markdown(f"**Man of the Match:** {motm}")
+        # downloads
+        try:
+            json_bytes = export_match_json(state)
+            csv_bytes = export_match_csv(state)
+            st.download_button("Download final (JSON)", data=json_bytes, file_name=f"match_{mid}_final.json", mime="application/json")
+            st.download_button("Download final (CSV)", data=csv_bytes, file_name=f"match_{mid}_final.csv", mime="text/csv")
+        except Exception:
+            pass
 
-    # main scoreboard (styled with team color)
-    st.markdown(f"""
-    <div class='score-card' style='background: linear-gradient(90deg,{theme_color},{theme_color});'>
-      <div style='font-size:18px;font-weight:800'>{state.get('title','Match')}</div>
-      <div style='margin-top:8px;font-size:16px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:20px'>{sc.get('wkts',0)}</span></div>
-      <div style='font-size:12px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    col1, col2 = st.columns([2,1])
+    with col1:
+        st.markdown(f"<div class='score-card'>\n  <div style='font-size:28px;font-weight:900'>{state.get('title','Match')}</div>\n  <div style='font-size:22px;margin-top:8px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:22px'>{sc.get('wkts',0)}</span></div>\n  <div style='font-size:14px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {((sc.get('runs',0)/(sc.get('balls',0)/6)) if sc.get('balls',0)>0 else 0):.2f}</div>\n</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='margin-top:8px' class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown("**Current Players**")
+        br = state.get('batting',{})
+        st.markdown(f"- Striker: **{br.get('striker','-')}**")
+        st.markdown(f"- Non-striker: **{br.get('non_striker','-')}**")
+        st.markdown(f"- Next index: **{br.get('next_index',0)}**")
+        st.markdown("---")
+        st.markdown("**Bowling**")
+        st.markdown(f"- Current: **{state.get('bowling',{}).get('current_bowler','-')}**")
+        st.markdown(f"- Last over: **{state.get('bowling',{}).get('last_over_bowler','-')}**")
 
-    st.markdown(f"<div style='margin-top:8px' class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    # ----- Player & Bowler selectors (mandatory before scoring) -----
-    team_players = state.get('teams', {}).get(bat, [])[:]   # batting team order
+    lock = state.get('scorer_lock', {})
+    locked_by = lock.get('locked_by')
+    colA, colB = st.columns([1,1])
+    with colA:
+        if locked_by and locked_by != normalize_mobile(cm.get('Mobile','')):
+            st.warning(f"स्कोरर लॉक: यह मैच पहले से {locked_by} द्वारा लॉक है।")
+        elif locked_by == normalize_mobile(cm.get('Mobile','')):
+            st.success("आपके पास स्कोरर लॉक है।")
+        else:
+            if st.button("Acquire Lock"):
+                ok = try_acquire_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
+                if ok:
+                    st.experimental_rerun()
+                else:
+                    st.error("लॉक नहीं लिया जा सका।")
+    with colB:
+        if st.button("Release Lock"):
+            ok = release_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
+            if ok:
+                st.success("लॉक छोड़ा गया।")
+                st.experimental_rerun()
+            else:
+                st.info("आपके पास लॉक नहीं था।")
+
+    lock_ok = (not state.get('scorer_lock')) or (state.get('scorer_lock',{}).get('locked_by') == normalize_mobile(cm.get('Mobile','')))
+    if not lock_ok:
+        st.info("स्कोर करने से पहले Acquire Lock लें।")
+        st.stop()
+
+    # ---- Player & Bowler selector (paste this before Quick Actions block) ----
+    # team batting now (bat) and other team (other) already defined above
+    team_players = state.get('teams', {}).get(bat, [])[:]   # batting team order/names
     other_team_players = state.get('teams', {}).get(other, [])[:]  # potential bowlers
 
+    # Make readable labels: if mobile numbers present, show last 4 or name
+    def player_label(p):
+        if not p: return "-"
+        if any(ch.isdigit() for ch in str(p)) and len(str(p))>=4:
+            s = str(p)
+            return s if len(s)<=12 else (s[-10:])  # show last 10 digits
+        return str(p)
+
+    # Current on-field defaults
     cur_striker = state.get('batting',{}).get('striker','') or (team_players[0] if team_players else '')
     cur_non = state.get('batting',{}).get('non_striker','') or (team_players[1] if len(team_players)>1 else '')
     cur_bowler = state.get('bowling',{}).get('current_bowler','') or (other_team_players[0] if other_team_players else '')
 
+    # UI selectors (unique keys per match)
     st.markdown("### Set On-field Players (required)")
     sel_col1, sel_col2, sel_col3 = st.columns(3)
     with sel_col1:
@@ -886,38 +1001,24 @@ if menu == "Live Scorer":
     with sel_col3:
         bowler_sel = st.selectbox("Current Bowler", options=other_team_players, index=(other_team_players.index(cur_bowler) if cur_bowler in other_team_players else 0), key=f"bowler_{mid}")
 
+    # Save selections button
     if st.button("Set Players / Bowler", key=f"setplayers_{mid}"):
         state.setdefault('batting',{})['striker'] = striker_sel
         state.setdefault('batting',{})['non_striker'] = non_sel
         state.setdefault('bowling',{})['current_bowler'] = bowler_sel
-        state.setdefault('bowling',{})['over_needs_change'] = False
         save_match_state(mid, state)
-        safe_rerun()
+        st.experimental_rerun()
 
-        # determine if over-change is required (i.e., last action finished an over)
-    sc_now = state.get('score',{}).get(bat, {})
-    over_needs_change = False
-    if sc_now and sc_now.get('balls',0) > 0 and sc_now.get('balls',0) % 6 == 0:
+    # End over / select new bowler control
+    cur_balls = state.get('score',{}).get(bat,{}).get('balls',0)
+    if cur_balls > 0 and cur_balls % 6 == 0:
         # mark flag in state (persist) so other users know over-change required
         if not state.setdefault('bowling',{}).get('over_needs_change', False):
             state.setdefault('bowling',{})['over_needs_change'] = True
             save_match_state(mid, state)
-        over_needs_change = True
-    else:
-        # clear flag if not an over boundary
-        if state.setdefault('bowling',{}).get('over_needs_change'):
-            state.setdefault('bowling',{})['over_needs_change'] = False
-            save_match_state(mid, state)
-        over_needs_change = False
-
-    # If over change required, show bowler selector first
-    if over_needs_change:
-        st.warning("Over completed — कृपया नया गेंदबाज़ (Next Bowler) चुनें।")
+        st.info("Over completed — कृपया नया गेंदबाज़ (Next Bowler) चुनें।")
         nb_col1, nb_col2 = st.columns([2,1])
-        # load fresh list each render
-        other_team_players = state.get('teams', {}).get(other, [])[:]
         with nb_col1:
-            # use a stable key including match id
             next_bowler = st.selectbox("Select next bowler", options=other_team_players, index=0, key=f"nextbowler_{mid}")
         with nb_col2:
             if st.button("Set Next Bowler", key=f"setnext_{mid}"):
@@ -925,29 +1026,21 @@ if menu == "Live Scorer":
                     if not next_bowler or str(next_bowler).strip() == "":
                         st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
                     else:
-                        # set new bowler and clear over flag
                         last = state.get('bowling',{}).get('current_bowler','')
                         state.setdefault('bowling',{})['last_over_bowler'] = last
                         state.setdefault('bowling',{})['current_bowler'] = next_bowler
                         state.setdefault('bowling',{})['over_needs_change'] = False
                         save_match_state(mid, state)
-
-                        # clear session keys that might cause stale selects
                         try:
                             for k in [f"nextbowler_{mid}", f"bowler_{mid}", f"striker_{mid}", f"nonstriker_{mid}"]:
                                 if k in st.session_state:
                                     del st.session_state[k]
                         except Exception:
                             pass
-
                         st.success(f"Next bowler set to {next_bowler}. Scoring resumed.")
-                        # safe rerun to refresh UI and show scoring controls
                         safe_rerun()
-                except Exception as e:
-                    st.error(f"Failed to set next bowler: {e}")
-        # DO NOT call st.stop() here — after setting bowler we rerun and continue
 
-    # Quick actions and wicket handling
+    # ---- Quick Actions & Scoring buttons ----
     left, right = st.columns([2,1])
     with left:
         st.subheader("Quick Actions")
@@ -956,14 +1049,9 @@ if menu == "Live Scorer":
         values = ["0","1","2","3","4","6"]
         for i in range(6):
             with runs[i]:
-                if st.button(labels[i], key=f"run_{i}_{mid}"):
+                if st.button(labels[i]):
                     try:
-                        state.setdefault('bowling',{})['current_bowler'] = state.get('bowling',{}).get('current_bowler','') or bowler_sel
-                        state.setdefault('batting',{})['striker'] = state.get('batting',{}).get('striker','') or striker_sel
-                        with st.spinner("Recording..."):
-                            entry = record_ball_full(state, mid, values[i])
-                            save_match_state(mid, state)
-                        safe_rerun()
+                        entry = record_ball_full(state, mid, values[i]); save_match_state(mid, state); st.experimental_rerun()
                     except Exception as e:
                         st.error(e)
 
@@ -971,46 +1059,25 @@ if menu == "Live Scorer":
         with ex1:
             if st.button("Wide (WD)"):
                 try:
-                    with st.spinner("Recording..."):
-                        entry = record_ball_full(state, mid, 'WD', extras={'runs':1}); save_match_state(mid, state)
-                    safe_rerun()
+                    entry = record_ball_full(state, mid, 'WD', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e:
                     st.error(e)
         with ex2:
             if st.button("No Ball (NB)"):
                 try:
-                    with st.spinner("Recording..."):
-                        entry = record_ball_full(state, mid, 'NB', extras={'runs_off_bat':0}); save_match_state(mid, state)
-                    safe_rerun()
+                    entry = record_ball_full(state, mid, 'NB', extras={'runs_off_bat':0}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e:
                     st.error(e)
         with ex3:
             if st.button("Bye (BY)"):
                 try:
-                    with st.spinner("Recording..."):
-                        entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state)
-                    safe_rerun()
+                    entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e:
                     st.error(e)
 
-        # Wicket expander - require new batsman from batting order
-                # Wicket expander - require new batsman from batting order
+        # Wicket expander - require new batsman from batting order (robust matching)
         with st.expander("Wicket ⚠️"):
             wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"], key=f"wtype_{mid}")
-
-            # helper: smart compare (numbers => last10, else case-insensitive)
-            def same_player(a, b):
-                if not a or not b: return False
-                sa = str(a).strip()
-                sb = str(b).strip()
-                # if both contain digits, compare last 10 digits
-                if any(ch.isdigit() for ch in sa) and any(ch.isdigit() for ch in sb):
-                    da = "".join([c for c in sa if c.isdigit()])
-                    db = "".join([c for c in sb if c.isdigit()])
-                    if len(da) >= 10 and len(db) >= 10:
-                        return da[-10:] == db[-10:]
-                    return da == db
-                return sa.lower() == sb.lower()
 
             # batting team (current)
             bat_team = state.get("bat_team", "Team A")
@@ -1071,15 +1138,25 @@ if menu == "Live Scorer":
                     except Exception as e:
                         st.error(f"Wicket record failed: {e}")
 
-
     with right:
         st.subheader("Batsmen")
         bats = state.get('batsman_stats', {})
         if not bats:
             st.info("No batsman data yet")
         else:
+            rows = []
             for name, vals in bats.items():
-                st.markdown(f"<div class='small-card'>\n  <div class='batsman-row'><div><strong>{name}</strong><div style='font-size:12px'>R: {vals.get('R',0)} • B: {vals.get('B',0)} • 4s: {vals.get('4',0)} • 6s: {vals.get('6',0)}</div></div><div style='font-weight:800'>{( (vals.get('R',0)/max(1,vals.get('B',0)))*100 ):.1f}</div></div>\n</div>", unsafe_allow_html=True)
+                t = player_team(state, name)
+                if t != bat:
+                    continue
+                R = vals.get("R",0); B = vals.get("B",0); F = vals.get("4",0); S6 = vals.get("6",0)
+                SR = (R / B * 100) if B>0 else 0.0
+                rows.append({"Player": name, "R": R, "B": B, "4s": F, "6s": S6, "SR": f"{SR:.1f}"})
+            if rows:
+                df = pd.DataFrame(rows).sort_values("R", ascending=False).reset_index(drop=True)
+                st.table(df)
+            else:
+                st.info("No batsmen of current batting team recorded yet.")
 
         st.markdown("---")
         st.subheader("Bowlers")
@@ -1087,8 +1164,19 @@ if menu == "Live Scorer":
         if not bowl:
             st.info("No bowlers yet")
         else:
+            rows = []
+            opp_team = other
             for name, vals in bowl.items():
-                st.markdown(f"<div class='small-card'><div style='padding:6px'><strong>{name}</strong><div style='font-size:12px'>O: {format_over_ball(vals.get('B',0))} • R: {vals.get('R',0)} • W: {vals.get('W',0)}</div></div></div>", unsafe_allow_html=True)
+                t = player_team(state, name)
+                if t != opp_team:
+                    continue
+                balls = vals.get("B",0); runs = vals.get("R",0); wkts = vals.get("W",0)
+                rows.append({"Bowler": name, "Balls": format_over_ball(balls), "R": runs, "W": wkts})
+            if rows:
+                dfb = pd.DataFrame(rows).sort_values("W", ascending=False).reset_index(drop=True)
+                st.table(dfb)
+            else:
+                st.info("No bowlers of opposition team recorded yet.")
 
         st.markdown("---")
         st.subheader("Last 12 Balls")
@@ -1110,7 +1198,7 @@ if menu == "Live Scorer":
         if st.button("Undo Last Ball"):
             ok = undo_last_ball_full(state, mid)
             if ok:
-                save_match_state(mid, state); st.success("Last ball undone."); safe_rerun()
+                save_match_state(mid, state); st.success("Last ball undone."); st.experimental_rerun()
             else:
                 st.info("No ball to undo.")
     with f2:
@@ -1119,9 +1207,15 @@ if menu == "Live Scorer":
             st.download_button("Download JSON", data=data, file_name=f"match_{mid}.json", mime="application/json")
     with f3:
         if st.button("End Match (Complete)"):
-            state['status'] = 'COMPLETED'
-            save_match_state(mid, state)
-            st.success("Match marked completed."); safe_rerun()
+            try:
+                summary = finalize_match(mid, state)
+                st.success("Match marked completed.")
+                st.info(summary.get("result_text","Result computed"))
+                if summary.get("man_of_match_auto"):
+                    st.info(f"Man of the Match (auto): {summary.get('man_of_match_auto')}")
+                safe_rerun()
+            except Exception as e:
+                st.error(f"Failed to finalize match: {e}")
 
     save_match_state(mid, state)
 
@@ -1130,16 +1224,12 @@ if menu == "Live Score (Public)":
     matches = load_matches_index()
     if not matches:
         st.info("No matches"); st.stop()
-
     mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}", key="pub_match_select")
     state = load_match_state(mid)
     if not state:
         st.error("Match state missing"); st.stop()
-
-    # Auto-refresh for public viewers (adjust interval ms as needed)
     if HAS_AUTORE:
         st_autorefresh(interval=5000, key=f"public_auto_{mid}")
-
     st.markdown(f"### {matches[mid]['title']}")
 
     # basic score
@@ -1186,32 +1276,46 @@ if menu == "Live Score (Public)":
     st.write(f"Team A: {pretty(state['score'].get('Team A',{}))}")
     st.write(f"Team B: {pretty(state['score'].get('Team B',{}))}")
 
-    # Batsmen table (public)
+    # Completed summary & downloads (public)
+    if state.get("status") == "COMPLETED":
+        fs = state.get("final_summary", {})
+        st.success("Match completed — final scorecard")
+        if fs:
+            st.markdown(f"**Result:** {fs.get('result_text','')}")
+            motm = fs.get("man_of_the_match") or fs.get("man_of_match_auto") or state.get("man_of_match_override","")
+            if motm:
+                st.markdown(f"**Man of the Match:** {motm}")
+        st.download_button("Download final (JSON)", data=export_match_json(state), file_name=f"match_{mid}_final.json", mime="application/json")
+        st.download_button("Download final (CSV)", data=export_match_csv(state), file_name=f"match_{mid}_final.csv", mime="text/csv")
+
+    # Batsmen table (public) - show batting team's batsmen
     st.markdown("### Batsmen")
     bats = state.get("batsman_stats", {})
-    if bats:
-        rows = []
-        for name, vals in bats.items():
-            R = vals.get("R",0); B = vals.get("B",0); F = vals.get("4",0); S6 = vals.get("6",0)
-            SR = (R / B * 100) if B>0 else 0.0
-            rows.append({"Player": name, "R": R, "B": B, "4s": F, "6s": S6, "SR": f"{SR:.1f}"})
-        df_b = pd.DataFrame(rows).sort_values("R", ascending=False).reset_index(drop=True)
-        st.table(df_b)
+    rows = []
+    for name, vals in bats.items():
+        if player_team(state, name) != bat:
+            continue
+        R = vals.get("R",0); B = vals.get("B",0); F = vals.get("4",0); S6 = vals.get("6",0)
+        SR = (R / B * 100) if B>0 else 0.0
+        rows.append({"Player": name, "R": R, "B": B, "4s": F, "6s": S6, "SR": f"{SR:.1f}"})
+    if rows:
+        st.table(pd.DataFrame(rows).sort_values("R", ascending=False).reset_index(drop=True))
     else:
-        st.info("No batsman stats available yet.")
+        st.info("No batsman stats available yet for current batting team.")
 
-    # Bowlers table (public)
+    # Bowlers table (public) - show opposition team's bowlers
     st.markdown("### Bowlers")
     bowls = state.get("bowler_stats", {})
-    if bowls:
-        rows = []
-        for name, vals in bowls.items():
-            balls = vals.get("B",0); runs = vals.get("R",0); wkts = vals.get("W",0)
-            rows.append({"Bowler": name, "Balls": format_over_ball(balls), "R": runs, "W": wkts})
-        df_bo = pd.DataFrame(rows).sort_values("W", ascending=False).reset_index(drop=True)
-        st.table(df_bo)
+    rows = []
+    for name, vals in bowls.items():
+        if player_team(state, name) != other:
+            continue
+        balls = vals.get("B",0); runs = vals.get("R",0); wkts = vals.get("W",0)
+        rows.append({"Bowler": name, "Balls": format_over_ball(balls), "R": runs, "W": wkts})
+    if rows:
+        st.table(pd.DataFrame(rows).sort_values("W", ascending=False).reset_index(drop=True))
     else:
-        st.info("No bowler stats available yet.")
+        st.info("No bowler stats available yet for opposition team.")
 
     # Last 12 balls
     st.markdown("### Last 12 Balls")
@@ -1237,20 +1341,47 @@ if menu == "Live Score (Public)":
 
 # ---------------- Player Stats ----------------
 if menu == "Player Stats":
-    st.subheader("Player Statistics")
+    st.subheader("Player Statistics (from completed matches)")
     matches = load_matches_index()
     stats = {}
-    for mid in matches.keys():
-        s = load_match_state(mid)
-        for name, vals in s.get("batsman_stats", {}).items():
-            rec = stats.setdefault(name, {"R":0,"B":0,"4":0,"6":0})
-            rec["R"] += vals.get("R",0); rec["B"] += vals.get("B",0); rec["4"] += vals.get("4",0); rec["6"] += vals.get("6",0)
+    for mid,info in matches.items():
+        # only completed
+        if info.get("completed_at") or info.get("final_summary_brief"):
+            s = load_match_state(mid)
+            if not s:
+                continue
+            for name, vals in s.get("batsman_stats", {}).items():
+                rec = stats.setdefault(name, {"R":0,"B":0,"4":0,"6":0,"matches":0})
+                rec["R"] += int(vals.get("R",0) or 0)
+                rec["B"] += int(vals.get("B",0) or 0)
+                rec["4"] += int(vals.get("4",0) or 0)
+                rec["6"] += int(vals.get("6",0) or 0)
+            for name, vals in s.get("bowler_stats", {}).items():
+                rec = stats.setdefault(name, {"W":0,"balls_bowled":0})
+                rec["W"] += int(vals.get("W",0) or 0)
+                rec["balls_bowled"] += int(vals.get("B",0) or 0)
+            for p in set(list(s.get("batsman_stats",{}).keys()) + list(s.get("bowler_stats",{}).keys())):
+                stats.setdefault(p, {}).setdefault("matches",0)
+                stats[p]["matches"] = stats[p].get("matches",0) + 1
+
     if not stats:
-        st.info("No data")
+        st.info("No completed matches / stats yet.")
     else:
-        df = pd.DataFrame.from_dict(stats, orient="index").reset_index().rename(columns={"index":"Player"})
-        df["SR"] = (df["R"]/df["B"].replace(0,1))*100
-        st.dataframe(df.sort_values("R", ascending=False))
+        rows = []
+        for p, v in stats.items():
+            rows.append({
+                "Player": p,
+                "Runs": v.get("R",0),
+                "Balls": v.get("B",0),
+                "4s": v.get("4",0),
+                "6s": v.get("6",0),
+                "W": v.get("W",0),
+                "Matches": v.get("matches",0),
+                "SR": ( (v.get("R",0) / v.get("B",1)) * 100 ) if v.get("B",0)>0 else 0.0
+            })
+        df = pd.DataFrame(rows).sort_values("Runs", ascending=False).reset_index(drop=True)
+        st.dataframe(df)
+        st.download_button("Download Player Stats (CSV)", data=df.to_csv(index=False).encode("utf-8"), file_name="player_stats.csv", mime="text/csv")
 
 # ---------------- Admin ----------------
 if menu == "Admin":
@@ -1297,6 +1428,22 @@ if menu == "Admin":
         st.info("Paid list empty")
     st.markdown("### Member registry")
     st.dataframe(read_members())
+
+    st.markdown("### Final scorecards / backups")
+    files = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith(f"match_")], reverse=True)
+    if files:
+        sel = st.selectbox("Select snapshot", options=files)
+        p = os.path.join(BACKUP_DIR, sel)
+        if sel.endswith(".json"):
+            if st.button("Download selected JSON"):
+                with open(p, "rb") as fh:
+                    st.download_button("Download", data=fh.read(), file_name=sel, mime="application/json")
+        else:
+            if st.button("Download selected file"):
+                with open(p, "rb") as fh:
+                    st.download_button("Download", data=fh.read(), file_name=sel, mime="application/octet-stream")
+    else:
+        st.info("No backups found yet.")
 
 # ---------------- Footer ----------------
 st.markdown("---")
