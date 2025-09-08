@@ -1009,7 +1009,7 @@ if menu == "Live Scorer":
         save_match_state(mid, state)
         st.experimental_rerun()
 
-    # End over / select new bowler control
+        # End over / select new bowler control (REPLACEMENT — safe try/except + session_state cleanup)
     cur_balls = state.get('score',{}).get(bat,{}).get('balls',0)
     if cur_balls > 0 and cur_balls % 6 == 0:
         # mark flag in state (persist) so other users know over-change required
@@ -1022,23 +1022,28 @@ if menu == "Live Scorer":
             next_bowler = st.selectbox("Select next bowler", options=other_team_players, index=0, key=f"nextbowler_{mid}")
         with nb_col2:
             if st.button("Set Next Bowler", key=f"setnext_{mid}"):
-                try:
-                    if not next_bowler or str(next_bowler).strip() == "":
-                        st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
-                    else:
+                # guard: ensure valid selection
+                if not next_bowler or str(next_bowler).strip() == "":
+                    st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
+                else:
+                    try:
                         last = state.get('bowling',{}).get('current_bowler','')
                         state.setdefault('bowling',{})['last_over_bowler'] = last
                         state.setdefault('bowling',{})['current_bowler'] = next_bowler
                         state.setdefault('bowling',{})['over_needs_change'] = False
                         save_match_state(mid, state)
+                        # session state cleanup (in a safe try/except)
                         try:
                             for k in [f"nextbowler_{mid}", f"bowler_{mid}", f"striker_{mid}", f"nonstriker_{mid}"]:
                                 if k in st.session_state:
                                     del st.session_state[k]
                         except Exception:
+                            # swallowing session_state cleanup errors (non-fatal)
                             pass
                         st.success(f"Next bowler set to {next_bowler}. Scoring resumed.")
                         safe_rerun()
+                    except Exception as e:
+                        st.error(f"Failed to set next bowler: {e}")
 
     # ---- Quick Actions & Scoring buttons ----
     left, right = st.columns([2,1])
