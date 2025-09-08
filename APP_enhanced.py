@@ -1064,47 +1064,108 @@ if menu == "Live Score (Public)":
     matches = load_matches_index()
     if not matches:
         st.info("No matches"); st.stop()
-    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}")
+
+    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}", key="pub_match_select")
     state = load_match_state(mid)
     if not state:
         st.error("Match state missing"); st.stop()
+
+    # Auto-refresh for public viewers (adjust interval ms as needed)
     if HAS_AUTORE:
-        st_autorefresh(interval=8000, key=f"auto_pub_{mid}")
+        st_autorefresh(interval=5000, key=f"public_auto_{mid}")
+
     st.markdown(f"### {matches[mid]['title']}")
+
+    # basic score
     bat = state.get("bat_team","Team A")
     sc = state.get("score", {}).get(bat, {"runs":0,"wkts":0,"balls":0})
+    other = "Team A" if bat == "Team B" else "Team B"
+    opp_sc = state.get("score", {}).get(other, {"runs":0,"wkts":0,"balls":0})
 
-    overs_completed = sc.get("balls",0)
-    overs_done = f"{overs_completed//6}.{overs_completed%6}"
-    rr = (sc.get("runs",0) / (overs_completed/6)) if overs_completed>0 else 0.0
-    target_info = ""
+    overs_done = format_over_ball(sc.get("balls",0))
+    rr = (sc.get("runs",0) / (sc.get("balls",0)/6)) if sc.get("balls",0)>0 else 0.0
+
+    # header card
+    st.markdown(f"""
+    <div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
+      <div style='font-size:28px;font-weight:900;'>{state.get('bat_team')}: {sc.get('runs',0)}/{sc.get('wkts',0)}</div>
+      <div style='font-size:13px;margin-top:6px;'>Overs: {overs_done} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # current players area
+    st.markdown("#### Current On-field")
+    br = state.get("batting", {})
+    bw = state.get("bowling", {})
+    striker = br.get("striker", "-")
+    non_striker = br.get("non_striker", "-")
+    current_bowler = bw.get("current_bowler", "-")
+    st.write(f"**Striker:** {striker}   •   **Non-striker:** {non_striker}   •   **Bowler:** {current_bowler}")
+
+    # Target/Required when INNINGS2
     if state.get("status") == "INNINGS2":
-        other = "Team A" if state.get("bat_team")=="Team B" else "Team B"
-        opp_runs = state.get("score", {}).get(other, {}).get("runs",0)
+        other_team = "Team A" if state.get("bat_team")=="Team B" else "Team B"
+        opp_runs = state.get("score", {}).get(other_team, {}).get("runs", 0)
         target = opp_runs + 1
         runs_needed = max(0, target - sc.get("runs",0))
         balls_remaining = max(0, int(state.get("overs_limit",0))*6 - sc.get("balls",0)) if int(state.get("overs_limit",0))>0 else None
         req_rr = (runs_needed/(balls_remaining/6)) if balls_remaining and balls_remaining>0 else None
-        req_rr_text = f" • Required RR: {req_rr:.2f}" if req_rr is not None else ""
-        target_info = f"<div style='font-size:14px;color:#fff;opacity:0.95;margin-top:6px;'>Target: {target} • {runs_needed} runs needed from {balls_remaining} balls{req_rr_text}</div>"
-
-    st.markdown(f"""
-    <div style='background:#0b6efd;padding:18px;border-radius:12px;text-align:center;color:white;margin-bottom:18px;'>
-      <div style='font-size:34px;font-weight:900;'>{state.get('bat_team')}: {sc.get('runs',0)}/{sc.get('wkts',0)}</div>
-      <div style='font-size:14px;margin-top:6px;'>Overs: {overs_done} &nbsp; • &nbsp; Run Rate: {rr:.2f}</div>
-      {target_info}
-    </div>
-    """, unsafe_allow_html=True)
+        req_text = f"{runs_needed} runs required from {balls_remaining} balls"
+        if req_rr is not None:
+            req_text += f" • Required RR: {req_rr:.2f}"
+        st.info(req_text)
 
     st.markdown("### Score details")
     def pretty(s): return f"{s.get('runs',0)}/{s.get('wkts',0)} ({format_over_ball(s.get('balls',0))})"
     st.write(f"Team A: {pretty(state['score'].get('Team A',{}))}")
     st.write(f"Team B: {pretty(state['score'].get('Team B',{}))}")
 
+    # Batsmen table (public)
+    st.markdown("### Batsmen")
+    bats = state.get("batsman_stats", {})
+    if bats:
+        rows = []
+        for name, vals in bats.items():
+            R = vals.get("R",0); B = vals.get("B",0); F = vals.get("4",0); S6 = vals.get("6",0)
+            SR = (R / B * 100) if B>0 else 0.0
+            rows.append({"Player": name, "R": R, "B": B, "4s": F, "6s": S6, "SR": f"{SR:.1f}"})
+        df_b = pd.DataFrame(rows).sort_values("R", ascending=False).reset_index(drop=True)
+        st.table(df_b)
+    else:
+        st.info("No batsman stats available yet.")
+
+    # Bowlers table (public)
+    st.markdown("### Bowlers")
+    bowls = state.get("bowler_stats", {})
+    if bowls:
+        rows = []
+        for name, vals in bowls.items():
+            balls = vals.get("B",0); runs = vals.get("R",0); wkts = vals.get("W",0)
+            rows.append({"Bowler": name, "Balls": format_over_ball(balls), "R": runs, "W": wkts})
+        df_bo = pd.DataFrame(rows).sort_values("W", ascending=False).reset_index(drop=True)
+        st.table(df_bo)
+    else:
+        st.info("No bowler stats available yet.")
+
+    # Last 12 balls
+    st.markdown("### Last 12 Balls")
+    last12 = state.get("balls_log", [])[-12:][::-1]
+    if last12:
+        for b in last12:
+            t = b.get("time","")
+            out = b.get("outcome","")
+            s = b.get("striker","-")
+            bow = b.get("bowler","-")
+            st.markdown(f"- {format_over_ball(int(b.get('prev_score',{}).get('balls',0)))} → {s} vs {bow} → {out}")
+    else:
+        st.info("No balls recorded yet.")
+
+    # Commentary (last 20)
     st.markdown("### Commentary")
     for txt in state.get("commentary", [])[-20:][::-1]:
         st.markdown(f"<div style='background:#f8fafc;padding:8px;border-radius:8px;margin-bottom:6px;'>{txt}</div>", unsafe_allow_html=True)
 
+    # Match finished label
     if state.get("status") == "COMPLETED":
         st.success("Match completed — scoring closed.")
 
