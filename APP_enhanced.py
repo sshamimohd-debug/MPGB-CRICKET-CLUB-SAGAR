@@ -994,18 +994,35 @@ if menu == "Live Scorer":
                     st.error(e)
 
         # Wicket expander - require new batsman from batting order
+                # Wicket expander - require new batsman from batting order
         with st.expander("Wicket ⚠️"):
             wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"], key=f"wtype_{mid}")
-            # compute candidates
-            bat_order = state.get('batting', {}).get('order', team_players[:])
-            on_field = [ state.get('batting',{}).get('striker',''), state.get('batting',{}).get('non_striker','') ]
+
+            # --- CORRECT: compute candidates from CURRENT BATTING TEAM ---
+            # batting team name
+            bat_team = state.get("bat_team", "Team A")
+            # batting order for the team currently batting
+            bat_order = state.get('teams', {}).get(bat_team, [])[:]
+            # players currently on field (striker/non-striker)
+            on_field = [
+                state.get('batting',{}).get('striker',''),
+                state.get('batting',{}).get('non_striker','')
+            ]
+            # mark players who have already batted (heuristic)
             used = set()
             for p, vals in state.get('batsman_stats', {}).items():
-                if vals.get('B',0)>0 or vals.get('R',0)>0:
+                # if player has faced balls or scored runs then consider as already batted
+                if vals.get('B',0) > 0 or vals.get('R',0) > 0:
                     used.add(p)
+
+            # candidates = players from batting order who are not already on field and not used
             candidates = [p for p in bat_order if p not in on_field and p not in used]
+
+            # fallback: if no candidates (e.g., order exhausted or names), allow any from batting order not on field
             if not candidates:
                 candidates = [p for p in bat_order if p not in on_field]
+
+            # final fallback: empty list -> let scorer type a name
             if candidates:
                 newbat = st.selectbox("New batsman (required)", options=candidates, key=f"newbat_{mid}")
             else:
@@ -1023,6 +1040,7 @@ if menu == "Live Scorer":
                         safe_rerun()
                     except Exception as e:
                         st.error(f"Wicket record failed: {e}")
+
 
     with right:
         st.subheader("Batsmen")
