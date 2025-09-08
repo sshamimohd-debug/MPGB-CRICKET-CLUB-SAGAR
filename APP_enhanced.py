@@ -760,106 +760,103 @@ if menu == "Match Setup":
                     except: pass
                     st.success("Deleted")
 
-# ---------------- Live Scorer (KDM-like Professional with Team Colors & Admin MOTM override) ----------------
+# ---------------- Live Scorer (Compact / KDM-like) ----------------
 if menu == "Live Scorer":
-    st.header("Live Scorer — MPGB (KDM-style)")
+    st.header("Live Scorer — Compact View (KDM-style)")
 
     st.markdown("""
     <style>
-    .score-card {color:white;padding:14px;border-radius:12px;}
-    .small-card {background:#fff;padding:10px;border-radius:10px;box-shadow:0 6px 18px rgba(2,6,23,0.06);margin-bottom:8px;}
+    /* compact styling */
+    .score-card {color:white;padding:12px;border-radius:10px;}
+    .small-card {background:#fff;padding:8px;border-radius:8px;box-shadow:0 6px 14px rgba(2,6,23,0.06);margin-bottom:6px;}
     .batsman-row{display:flex;justify-content:space-between;align-items:center;padding:6px 4px;border-bottom:1px solid #f1f5f9}
-    .dot {display:inline-block;width:14px;height:14px;border-radius:7px;margin-right:4px;line-height:14px;text-align:center;font-size:11px;}
-    .dot-0{background:#e2e8f0;color:#0f172a}.dot-1{background:#d1fae5;color:#065f46}.dot-4{background:#fef3c7;color:#92400e}.dot-6{background:#fee2e2;color:#7f1d1d}.dot-W{background:#ebe9ff;color:#4c1d95}
+    .btn-compact {min-width:56px; height:40px; border-radius:8px; font-weight:700}
+    .extras-row {margin-top:8px; display:flex; gap:8px;}
+    .right-block {padding-left:6px;}
     </style>
     """, unsafe_allow_html=True)
 
     cm = current_member()
     if not cm:
-        st.warning("स्कोर करने के लिए पहले Login करें (Sidebar → Login)।")
+        st.warning("पहले Login करें (Sidebar → Login).")
         st.stop()
 
-    # role check
     role = "admin" if normalize_mobile(cm.get("Mobile","")) == normalize_mobile(ADMIN_PHONE) else ("member" if is_mobile_paid(cm.get("Mobile","")) else "guest")
     if role not in ["member","admin"]:
-        st.warning("Scoring के लिए paid member होना अनिवार्य है।")
+        st.warning("Scoring के लिए paid member होना चाहिए.")
         st.stop()
 
     matches = load_matches_index()
     if not matches:
-        st.info("कोई मैच उपलब्ध नहीं — पहले Match Setup में मैच बनाइए।")
+        st.info("कोई मैच नहीं — Match Setup में नया मैच बनाइए.")
         st.stop()
 
-    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}", key=f"matchsel_{mid if 'mid' in locals() else 'sel'}")
+    # select match
+    mid = st.selectbox("Select Match", options=list(matches.keys()), format_func=lambda x: f"{x} — {matches[x]['title']}", key=f"matchsel_c_{st.session_state.get('MemberID','')}")
     state = load_match_state(mid)
     if not state:
-        st.error("Match state missing / load failed.")
-        st.stop()
+        st.error("Match state load failed."); st.stop()
 
-    # Auto refresh (requires streamlit-autorefresh installed)
+    # auto-refresh if available
     if HAS_AUTORE:
-        st_autorefresh(interval=5000, key=f"auto_{mid}")
+        st_autorefresh(interval=5000, key=f"auto_compact_{mid}")
 
     # helpers
+    def compute_rr(runs, balls):
+        return (runs/(balls/6)) if balls>0 else 0.0
     def innings_summary(team):
         s = state.get('score', {}).get(team, {"runs":0,"wkts":0,"balls":0})
         return f"{team}: {s.get('runs',0)}/{s.get('wkts',0)} ({format_over_ball(s.get('balls',0))})"
-    def compute_rr(runs, balls):
-        return (runs/(balls/6)) if balls>0 else 0.0
 
-    # team colours (customize if needed)
-    TEAM_A_COLOR = "#0b6efd"
-    TEAM_B_COLOR = "#10b981"
-    teamA_name = "Team A"
-    teamB_name = "Team B"
-
-    # current batting team
-    bat = state.get("bat_team", teamA_name)
+    # teams & scores
+    bat = state.get("bat_team","Team A")
     sc = state.get("score", {}).get(bat, {"runs":0,"wkts":0,"balls":0})
-    other = teamA_name if bat == teamB_name else teamB_name
+    other = "Team A" if bat == "Team B" else "Team B"
     opp_sc = state.get("score", {}).get(other, {"runs":0,"wkts":0,"balls":0})
 
-    # choose colour based on batting team
-    theme_color = TEAM_A_COLOR if bat == teamA_name else TEAM_B_COLOR
+    # theme color basic (blue / green)
+    TEAM_A_COLOR = "#0b6efd"
+    TEAM_B_COLOR = "#10b981"
+    theme_color = TEAM_A_COLOR if bat == "Team A" else TEAM_B_COLOR
 
-    # main scoreboard (styled with team color)
+    # main top scoreboard (compact)
     st.markdown(f"""
     <div class='score-card' style='background: linear-gradient(90deg,{theme_color},{theme_color});'>
-      <div style='font-size:18px;font-weight:800'>{state.get('title','Match')}</div>
-      <div style='margin-top:8px;font-size:16px'>{bat}: <span style='font-size:28px'>{sc.get('runs',0)}</span>/<span style='font-size:20px'>{sc.get('wkts',0)}</span></div>
-      <div style='font-size:12px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} &nbsp; • &nbsp; RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}</div>
+      <div style='font-size:15px;font-weight:800'>{state.get('title','Match')}</div>
+      <div style='margin-top:6px;font-size:14px'>{bat}: <span style='font-size:22px'>{sc.get('runs',0)}</span>/<span style='font-size:16px'>{sc.get('wkts',0)}</span></div>
+      <div style='font-size:11px;margin-top:6px'>Overs: {format_over_ball(sc.get('balls',0))} • RR: {compute_rr(sc.get('runs',0), sc.get('balls',0)):.2f}</div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown(f"<div class='small-card'><strong>Opponent:</strong> {other} — {opp_sc.get('runs',0)}/{opp_sc.get('wkts',0)} ({format_over_ball(opp_sc.get('balls',0))})</div>", unsafe_allow_html=True)
 
-    # ----- Player & Bowler selectors (mandatory before scoring) -----
-    team_players = state.get('teams', {}).get(bat, [])[:]   # batting team order
-    other_team_players = state.get('teams', {}).get(other, [])[:]  # bowlers
+    # ----- Player selectors (compact) -----
+    team_players = state.get('teams', {}).get(bat, [])[:]
+    other_team_players = state.get('teams', {}).get(other, [])[:]
 
-    cur_striker = state.get('batting',{}).get('striker','') or (team_players[0] if len(team_players)>0 else '')
+    cur_striker = state.get('batting',{}).get('striker','') or (team_players[0] if team_players else '')
     cur_non = state.get('batting',{}).get('non_striker','') or (team_players[1] if len(team_players)>1 else '')
     cur_bowler = state.get('bowling',{}).get('current_bowler','') or (other_team_players[0] if other_team_players else '')
 
-    st.markdown("### Set On-field Players (required)")
-    sel1, sel2, sel3 = st.columns(3)
-    with sel1:
+    st.markdown("**Set On-field Players (required)**")
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
         if team_players:
-            striker_sel = st.selectbox("Striker", options=team_players, index=(team_players.index(cur_striker) if cur_striker in team_players else 0), key=f"striker_{mid}")
+            striker_sel = st.selectbox("Striker", options=team_players, index=(team_players.index(cur_striker) if cur_striker in team_players else 0), key=f"striker_c_{mid}")
         else:
-            striker_sel = st.text_input("Striker", value=cur_striker, key=f"striker_{mid}")
-    with sel2:
+            striker_sel = st.text_input("Striker", value=cur_striker, key=f"striker_c_{mid}")
+    with c2:
         if team_players:
-            non_sel = st.selectbox("Non-striker", options=team_players, index=(team_players.index(cur_non) if cur_non in team_players else (1 if len(team_players)>1 else 0)), key=f"nonstriker_{mid}")
+            non_sel = st.selectbox("Non-striker", options=team_players, index=(team_players.index(cur_non) if cur_non in team_players else (1 if len(team_players)>1 else 0)), key=f"non_c_{mid}")
         else:
-            non_sel = st.text_input("Non-striker", value=cur_non, key=f"nonstriker_{mid}")
-    with sel3:
+            non_sel = st.text_input("Non-striker", value=cur_non, key=f"non_c_{mid}")
+    with c3:
         if other_team_players:
-            bowler_sel = st.selectbox("Current Bowler", options=other_team_players, index=(other_team_players.index(cur_bowler) if cur_bowler in other_team_players else 0), key=f"bowler_{mid}")
+            bowler_sel = st.selectbox("Bowler", options=other_team_players, index=(other_team_players.index(cur_bowler) if cur_bowler in other_team_players else 0), key=f"bow_c_{mid}")
         else:
-            bowler_sel = st.text_input("Current Bowler", value=cur_bowler, key=f"bowler_{mid}")
+            bowler_sel = st.text_input("Bowler", value=cur_bowler, key=f"bow_c_{mid}")
 
-    if st.button("Set Players / Bowler", key=f"setplayers_{mid}"):
+    if st.button("Set Players", key=f"setplayers_c_{mid}"):
         state.setdefault('batting',{})['striker'] = striker_sel
         state.setdefault('batting',{})['non_striker'] = non_sel
         state.setdefault('bowling',{})['current_bowler'] = bowler_sel
@@ -867,7 +864,7 @@ if menu == "Live Scorer":
         save_match_state(mid, state)
         st.experimental_rerun()
 
-    # determine if over-change is required (i.e., last action finished an over)
+    # detect over-change
     sc_now = state.get('score',{}).get(bat, {})
     over_needs_change = False
     if sc_now and sc_now.get('balls',0) > 0 and sc_now.get('balls',0) % 6 == 0:
@@ -879,213 +876,151 @@ if menu == "Live Scorer":
         state.setdefault('bowling',{})['over_needs_change'] = False
         over_needs_change = False
 
-    # innings break display
-    if state.get('status') == 'INNINGS2':
-        st.markdown(f"<div class='small-card'><strong>Innings 1 Summary</strong><br/>{innings_summary(other)}</div>", unsafe_allow_html=True)
-        target = opp_sc.get('runs',0) + 1
-        balls_total = int(state.get('overs_limit',0))*6 if int(state.get('overs_limit',0))>0 else 0
-        st.markdown(f"<div class='small-card'>Target for {bat}: <strong>{target}</strong> in {balls_total} balls</div>", unsafe_allow_html=True)
-
-    if state.get('status') == 'COMPLETED':
-        st.markdown("<div class='small-card'><strong>Match Completed — Summary</strong></div>", unsafe_allow_html=True)
-        st.markdown(f"- {innings_summary('Team A')}<br/>- {innings_summary('Team B')}", unsafe_allow_html=True)
-        rA = state.get('score',{}).get('Team A',{}).get('runs',0)
-        rB = state.get('score',{}).get('Team B',{}).get('runs',0)
-        if rA == rB:
-            st.success("Match Tied")
-        elif rA > rB:
-            st.success(f"Team A won by {rA-rB} runs")
-        else:
-            st.success(f"Team B won by {rB-rA} runs")
-
-        # Show automatic MOTM unless overridden
-        motm_override = state.get('man_of_match_override','').strip()
-        if motm_override:
-            st.info(f"Man of the Match (admin override): {motm_override}")
-        else:
-            motm = None; best_score = -1
-            for p,v in state.get('batsman_stats',{}).items():
-                metric = v.get('R',0)
-                if metric > best_score: best_score = metric; motm = p
-            for p,v in state.get('bowler_stats',{}).items():
-                metric = v.get('W',0)*20 + v.get('R',0)
-                if metric > best_score: best_score = metric; motm = p
-            if motm:
-                st.info(f"Man of the Match (auto): {motm}")
-
-    st.markdown("---")
-
-    # scorer lock
-    lock = state.get('scorer_lock', {})
-    locked_by = lock.get('locked_by')
-    c1, c2 = st.columns([1,1])
-    with c1:
-        if locked_by and locked_by != normalize_mobile(cm.get('Mobile','')):
-            st.warning(f"Scorer locked by {locked_by}")
-        elif locked_by == normalize_mobile(cm.get('Mobile','')):
-            st.success("You have scorer lock")
-        else:
-            if st.button("Acquire Lock"):
-                ok = try_acquire_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
-                if ok: st.experimental_rerun()
-    with c2:
-        if st.button("Release Lock"):
-            ok = release_scorer_lock(state, mid, normalize_mobile(cm.get('Mobile','')))
-            if ok: st.experimental_rerun()
-
-    if not ((not state.get('scorer_lock')) or (state.get('scorer_lock',{}).get('locked_by') == normalize_mobile(cm.get('Mobile','')))):
-        st.info("Acquire scorer lock to make changes."); st.stop()
-
-    # If over change required, force bowler selection first
+    # if over change required - force bowler selection (compact)
     if over_needs_change:
-        st.warning("Over completed — कृपया नया गेंदबाज़ चुनें (Next Bowler)")
-        nb1, nb2 = st.columns([2,1])
-        with nb1:
+        st.warning("Over complete — select next bowler (required).")
+        nb_left, nb_right = st.columns([2,1])
+        with nb_left:
             if other_team_players:
-                next_bowler = st.selectbox("Select Next Bowler", options=other_team_players, key=f"nextbowler_{mid}")
+                next_bowler = st.selectbox("Next Bowler", options=other_team_players, key=f"nextbowler_c_{mid}")
             else:
-                next_bowler = st.text_input("Next Bowler (name)", key=f"nextbowler_{mid}")
-        with nb2:
-            if st.button("Set Next Bowler", key=f"setnext_{mid}"):
+                next_bowler = st.text_input("Next Bowler (name)", key=f"nextbowler_c_{mid}")
+        with nb_right:
+            if st.button("Set Next Bowler", key=f"setnext_c_{mid}"):
                 last = state.get('bowling',{}).get('current_bowler','')
                 state.setdefault('bowling',{})['last_over_bowler'] = last
                 state.setdefault('bowling',{})['current_bowler'] = next_bowler
                 state.setdefault('bowling',{})['over_needs_change'] = False
                 save_match_state(mid, state)
                 st.experimental_rerun()
-        st.stop()  # prevent new ball until new bowler set
+        st.stop()
 
-    # Quick actions and wicket handling
-    left, right = st.columns([2,1])
-    with left:
+    # compact two-column layout 60/40
+    left_col, right_col = st.columns([3,2])
+
+    # LEFT: Quick actions (compact grid)
+    with left_col:
         st.subheader("Quick Actions")
-        # Quick run buttons
-        run_cols = st.columns(6)
-        labels = ["0","1","2","3","4 🎯","6 🔥"]
-        vals = ["0","1","2","3","4","6"]
-        for i in range(6):
-            with run_cols[i]:
-                if st.button(labels[i], key=f"run_{i}_{mid}"):
+        # 2 rows × 3 buttons for runs
+        r1, r2, r3 = st.columns(3)
+        runs_labels = [("0","0"),("1","1"),("2","2")]
+        for idx, (lbl,val) in enumerate(runs_labels):
+            with [r1,r2,r3][idx]:
+                if st.button(lbl, key=f"runA_{idx}_{mid}", help=f"Record {val}"):
                     try:
-                        # ensure current on-field players set
                         state.setdefault('bowling',{})['current_bowler'] = state.get('bowling',{}).get('current_bowler','') or bowler_sel
                         state.setdefault('batting',{})['striker'] = state.get('batting',{}).get('striker','') or striker_sel
-                        entry = record_ball_full(state, mid, vals[i])
-                        save_match_state(mid, state)
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.error(f"Record failed: {e}")
+                        entry = record_ball_full(state, mid, val); save_match_state(mid, state); st.experimental_rerun()
+                    except Exception as e: st.error(e)
+        r4, r5, r6 = st.columns(3)
+        runs_labels2 = [("3","3"),("4 🎯","4"),("6 🔥","6")]
+        for idx, (lbl,val) in enumerate(runs_labels2):
+            with [r4,r5,r6][idx]:
+                if st.button(lbl, key=f"runB_{idx}_{mid}", help=f"Record {val}"):
+                    try:
+                        state.setdefault('bowling',{})['current_bowler'] = state.get('bowling',{}).get('current_bowler','') or bowler_sel
+                        state.setdefault('batting',{})['striker'] = state.get('batting',{}).get('striker','') or striker_sel
+                        entry = record_ball_full(state, mid, val); save_match_state(mid, state); st.experimental_rerun()
+                    except Exception as e: st.error(e)
 
-        # Extras
-        e1,e2,e3,e4 = st.columns(4)
-        with e1:
-            if st.button("Wide (WD)", key=f"wd_{mid}"):
-                try:
-                    entry = record_ball_full(state, mid, 'WD', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
+        # extras & wicket in compact row
+        ex1, ex2, ex3, ex4 = st.columns([1,1,1,1])
+        with ex1:
+            if st.button("Wide (WD)", key=f"wdc_{mid}"):
+                try: entry = record_ball_full(state, mid, 'WD', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e: st.error(e)
-        with e2:
-            if st.button("No Ball (NB)", key=f"nb_{mid}"):
-                try:
-                    entry = record_ball_full(state, mid, 'NB', extras={'runs_off_bat':0}); save_match_state(mid, state); st.experimental_rerun()
+        with ex2:
+            if st.button("No Ball (NB)", key=f"nbc_{mid}"):
+                try: entry = record_ball_full(state, mid, 'NB', extras={'runs_off_bat':0}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e: st.error(e)
-        with e3:
-            if st.button("Bye (BY)", key=f"by_{mid}"):
-                try:
-                    entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
+        with ex3:
+            if st.button("Bye (BY)", key=f"byc_{mid}"):
+                try: entry = record_ball_full(state, mid, 'BY', extras={'runs':1}); save_match_state(mid, state); st.experimental_rerun()
                 except Exception as e: st.error(e)
-
-        # Wicket expander - require new batsman from batting order
-        with e4:
-            with st.expander("Wicket ⚠️"):
-                wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"], key=f"wtype_{mid}")
-                # compute candidates
+        with ex4:
+            with st.expander("Wicket ⚠️ (required new batsman)"):
+                wtype = st.selectbox("Wicket Type", options=["Bowled","Caught","LBW","Run Out","Stumped","Hit Wicket","Other"], key=f"wtype_c_{mid}")
                 bat_order = state.get('batting', {}).get('order', team_players[:])
                 on_field = [ state.get('batting',{}).get('striker',''), state.get('batting',{}).get('non_striker','') ]
-                used = set()
-                for p, vals in state.get('batsman_stats', {}).items():
-                    if vals.get('B',0)>0 or vals.get('R',0)>0:
-                        used.add(p)
+                used = set(p for p,v in state.get('batsman_stats',{}).items() if v.get('B',0)>0 or v.get('R',0)>0)
                 candidates = [p for p in bat_order if p not in on_field and p not in used]
-                if not candidates:
-                    candidates = [p for p in bat_order if p not in on_field]
+                if not candidates: candidates = [p for p in bat_order if p not in on_field]
                 if candidates:
-                    newbat = st.selectbox("New batsman (required)", options=candidates, key=f"newbat_{mid}")
+                    newbat = st.selectbox("New batsman", options=candidates, key=f"newbat_c_{mid}")
                 else:
-                    newbat = st.text_input("New batsman (enter name)", key=f"newbatfree_{mid}")
-
-                if st.button("Record Wicket", key=f"recw_{mid}"):
+                    newbat = st.text_input("New batsman (enter)", key=f"newbatfree_c_{mid}")
+                if st.button("Record Wicket", key=f"recw_c_{mid}"):
                     if not newbat or str(newbat).strip()=="":
-                        st.error("नया बल्लेबाज़ चुनें/डालें — wicket record करने के लिए आवश्यक।")
+                        st.error("नया बल्लेबाज़ चुनें/डालें।")
                     else:
                         try:
                             winfo = {'type': wtype, 'new_batsman': newbat}
-                            entry = record_ball_full(state, mid, 'W', wicket_info=winfo)
-                            save_match_state(mid, state)
-                            st.experimental_rerun()
-                        except Exception as e:
-                            st.error(f"Wicket record failed: {e}")
+                            entry = record_ball_full(state, mid, 'W', wicket_info=winfo); save_match_state(mid, state); st.experimental_rerun()
+                        except Exception as e: st.error(e)
 
-    # Right panel: detailed tables & last balls & commentary
-    with right:
-        st.subheader("Batsmen")
+    # RIGHT: compact stats, last balls, commentary
+    with right_col:
+        st.subheader("Batsmen (Top)")
         bats = state.get('batsman_stats', {})
-        if not bats:
-            st.info("No batsman data yet.")
-        else:
+        if bats:
             rows = []
             for name, vals in bats.items():
-                R = vals.get('R',0); B = vals.get('B',0); F4 = vals.get('4',0); S6 = vals.get('6',0)
+                R,B,F4,S6 = vals.get('R',0), vals.get('B',0), vals.get('4',0), vals.get('6',0)
                 SR = (R/max(1,B))*100 if B>0 else 0.0
                 rows.append({"Player":name,"R":R,"B":B,"4s":F4,"6s":S6,"SR":f"{SR:.1f}"})
-            dfb = pd.DataFrame(rows)
-            st.dataframe(dfb.sort_values("R", ascending=False), use_container_width=True)
+            dfb = pd.DataFrame(rows).sort_values("R", ascending=False).head(8)
+            st.dataframe(dfb, use_container_width=True)
+        else:
+            st.info("No batsman data yet.")
 
         st.markdown("---")
-        st.subheader("Bowlers")
+        st.subheader("Bowlers (Top)")
         bowl = state.get('bowler_stats', {})
-        if not bowl:
-            st.info("No bowlers yet.")
-        else:
+        if bowl:
             brow = []
             for name, vals in bowl.items():
                 balls = vals.get('B',0); runs = vals.get('R',0); wk = vals.get('W',0)
                 overs = f"{balls//6}.{balls%6}"
                 eco = (runs/(balls/6)) if balls>0 else 0.0
                 brow.append({"Bowler":name,"O":overs,"R":runs,"W":wk,"Eco":f"{eco:.2f}"})
-            dft = pd.DataFrame(brow)
-            st.dataframe(dft.sort_values("W", ascending=False), use_container_width=True)
+            dft = pd.DataFrame(brow).sort_values("W", ascending=False).head(8)
+            st.dataframe(dft, use_container_width=True)
+        else:
+            st.info("No bowlers yet.")
 
         st.markdown("---")
         st.subheader("Last 12 Balls")
         last12 = state.get('balls_log', [])[-12:][::-1]
-        if not last12:
-            st.info("No balls recorded yet.")
-        else:
+        if last12:
             for b in last12:
-                outcome = b.get('outcome','')
-                striker = b.get('striker','-'); bow = b.get('bowler','-')
-                st.markdown(f"{striker} ← {bow} • {outcome}  • Score: {b.get('post_score',{}).get('runs','-')}/{b.get('post_score',{}).get('wkts','-')}")
+                st.markdown(f"<div class='small-card'>{b.get('striker','-')} ← {b.get('bowler','-')} • <strong>{b.get('outcome','')}</strong> • {b.get('post_score',{}).get('runs','-')}/{b.get('post_score',{}).get('wkts','-')}</div>", unsafe_allow_html=True)
+        else:
+            st.info("No balls recorded yet.")
 
         st.markdown("---")
         st.subheader("Commentary")
-        for txt in state.get('commentary', [])[-12:][::-1]:
-            st.markdown(f"- {txt}")
+        comms = state.get('commentary', [])[-8:][::-1]
+        if comms:
+            for c in comms:
+                st.markdown(f"- {c}")
+        else:
+            st.info("No commentary yet.")
 
-    # bottom actions: undo / export / innings switch / end match
+    # bottom compact actions
     st.markdown("---")
-    a1,a2,a3,a4 = st.columns(4)
-    with a1:
+    ba,bb,bc = st.columns([1,1,1])
+    with ba:
         if st.button("Undo Last Ball"):
             ok = undo_last_ball_full(state, mid)
             if ok:
                 save_match_state(mid, state); st.success("Last ball undone."); st.experimental_rerun()
             else:
                 st.info("No ball to undo.")
-    with a2:
+    with bb:
         if st.button("Export JSON"):
             data = export_match_json(state)
             st.download_button("Download JSON", data=data, file_name=f"match_{mid}.json", mime="application/json")
-    with a3:
+    with bc:
         if st.button("Innings Break / Switch"):
             if state.get('status') == 'INNINGS1':
                 state['status'] = 'INNINGS2'; state['innings'] = 2
@@ -1094,38 +1029,15 @@ if menu == "Live Scorer":
                 save_match_state(mid, state); st.experimental_rerun()
             elif state.get('status') == 'INNINGS2':
                 state['status'] = 'COMPLETED'; save_match_state(mid, state); st.experimental_rerun()
-    with a4:
-        if st.button("End Match (Complete)"):
-            state['status'] = 'COMPLETED'; save_match_state(mid, state); st.experimental_rerun()
 
-    # Admin: Man-of-the-Match override
-    if role == "admin":
-        st.markdown("---")
-        st.subheader("Admin: Man of the Match (override)")
-        all_players = []
-        for t in state.get('teams',{}).values():
-            all_players.extend(t)
-        all_players = list(dict.fromkeys([p for p in all_players if p]))  # dedupe, keep order
-        current_override = state.get('man_of_match_override','')
-        new_override = st.selectbox("Select MOTM (optional)", options=[""] + all_players, index=(0 if not current_override else (all_players.index(current_override) + 1 if current_override in all_players else 0)), key=f"motm_{mid}")
-        if st.button("Set MOTM (admin)", key=f"setmotm_{mid}"):
-            state['man_of_match_override'] = new_override or ""
-            save_match_state(mid, state)
-            st.success("MOTM overridden."); st.experimental_rerun()
-
-    # highlights & target
+    # highlights & compact target view
     st.markdown("---")
-    st.subheader("Match Highlights")
+    st.subheader("Highlights")
     total_fours = sum([v.get('4',0) for v in state.get('batsman_stats',{}).values()])
     total_sixes = sum([v.get('6',0) for v in state.get('batsman_stats',{}).values()])
-    st.markdown(f"- Fours: {total_fours} • Sixes: {total_sixes}")
-    if state.get('batsman_stats'):
-        top_scorer = max(list(state.get('batsman_stats',{}).items()), key=lambda x: x[1].get('R',0))[0]
-        st.markdown(f"- Top scorer: {top_scorer} ({state.get('batsman_stats',{}).get(top_scorer,{}).get('R',0)})")
-    if state.get('bowler_stats'):
-        top_bowler = max(list(state.get('bowler_stats',{}).items()), key=lambda x: x[1].get('W',0))[0]
-        st.markdown(f"- Top bowler: {top_bowler} ({state.get('bowler_stats',{}).get(top_bowler,{}).get('W',0)} wkts)")
-
+    if total_fours or total_sixes:
+        st.markdown(f"- Fours: {total_fours}  •  Sixes: {total_sixes}")
+    # target / required (compact)
     if state.get('status') == 'INNINGS2':
         other_team = 'Team A' if state.get('bat_team')=='Team B' else 'Team B'
         other_runs = state.get('score',{}).get(other_team,{}).get('runs',0)
@@ -1134,11 +1046,10 @@ if menu == "Live Scorer":
         balls_total = int(state.get('overs_limit',0))*6 if int(state.get('overs_limit',0))>0 else 0
         balls_remaining = max(0, balls_total - sc.get('balls',0))
         req_rr = (runs_needed/(balls_remaining/6)) if balls_remaining>0 else None
-        st.markdown(f"<div class='small-card'><strong>Target:</strong> {target} • Needed: {runs_needed} from {balls_remaining} balls" + (f" • Required RR: {req_rr:.2f}" if req_rr is not None else "") + "</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='small-card'><strong>Target:</strong> {target} • Needed: {runs_needed} from {balls_remaining} balls" + (f" • RR: {req_rr:.2f}" if req_rr is not None else "") + "</div>", unsafe_allow_html=True)
 
-    # final save
+    # save state
     save_match_state(mid, state)
-
 
 # ---------------- Player Stats ----------------
 if menu == "Player Stats":
