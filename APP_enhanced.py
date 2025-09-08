@@ -22,7 +22,14 @@ PAID_CSV = os.path.join(DATA_DIR, "Members_Paid.csv")
 MATCH_INDEX = os.path.join(DATA_DIR, "matches_index.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 ADMIN_PHONE = "8931883300"  # change if needed
-LOGO_PATH = os.path.join(DATA_DIR, "logo.png")
+# Logo path: flexible (data/logo.png preferred, else fallback to repo root logo.png)
+_possible_paths = [
+    os.path.join(DATA_DIR, "logo.png"),
+    os.path.join(os.getcwd(), "logo.png"),
+    os.path.join(os.path.dirname(__file__), "logo.png"),
+]
+LOGO_PATH = next((p for p in _possible_paths if os.path.exists(p)), _possible_paths[0])
+
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(PHOTOS_DIR, exist_ok=True)
