@@ -1024,36 +1024,36 @@ st.markdown('</div>', unsafe_allow_html=True)  # root
 
 
     # End over / next bowler
-    cur_balls = state.get('score', {}).get(bat, {}).get('balls', 0)
-    if cur_balls > 0 and cur_balls % 6 == 0:
-        if not state.setdefault('bowling', {}).get('over_needs_change', False):
-            state.setdefault('bowling', {})['over_needs_change'] = True
-            save_match_state(mid, state)
-        st.info("Over completed — कृपया नया गेंदबाज़ (Next Bowler) चुनें।")
-        nb_col1, nb_col2 = st.columns([2, 1])
-        with nb_col1:
-            next_bowler = st.selectbox("Select next bowler", options=other_team_players, index=0, key=f"nextbowler_{mid}")
-        with nb_col2:
-            if st.button("Set Next Bowler", key=f"setnext_{mid}"):
-                if not next_bowler or str(next_bowler).strip() == "":
-                    st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
-                else:
+cur_balls = state.get('score', {}).get(bat, {}).get('balls', 0)
+if cur_balls > 0 and cur_balls % 6 == 0:
+    if not state.setdefault('bowling', {}).get('over_needs_change', False):
+        state.setdefault('bowling', {})['over_needs_change'] = True
+        save_match_state(mid, state)
+    st.info("Over completed — कृपया नया गेंदबाज़ (Next Bowler) चुनें।")
+    nb_col1, nb_col2 = st.columns([2, 1])
+    with nb_col1:
+        next_bowler = st.selectbox("Select next bowler", options=other_team_players, index=0, key=f"nextbowler_{mid}")
+    with nb_col2:
+        if st.button("Set Next Bowler", key=f"setnext_{mid}"):
+            if not next_bowler or str(next_bowler).strip() == "":
+                st.error("कृपया एक वैध अगले गेंदबाज़ का चयन करें।")
+            else:
+                try:
+                    last = state.get('bowling', {}).get('current_bowler', '')
+                    state.setdefault('bowling', {})['last_over_bowler'] = last
+                    state.setdefault('bowling', {})['current_bowler'] = next_bowler
+                    state.setdefault('bowling', {})['over_needs_change'] = False
+                    save_match_state(mid, state)
                     try:
-                        last = state.get('bowling', {}).get('current_bowler', '')
-                        state.setdefault('bowling', {})['last_over_bowler'] = last
-                        state.setdefault('bowling', {})['current_bowler'] = next_bowler
-                        state.setdefault('bowling', {})['over_needs_change'] = False
-                        save_match_state(mid, state)
-                        try:
-                            for k in [f"nextbowler_{mid}", f"bowler_{mid}", f"striker_{mid}", f"nonstriker_{mid}"]:
-                                if k in st.session_state:
-                                    del st.session_state[k]
-                        except Exception:
-                            pass
-                        st.success(f"Next bowler set to {next_bowler}. Scoring resumed.")
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.error(f"Failed to set next bowler: {e}")
+                        for k in [f"nextbowler_{mid}", f"bowler_{mid}", f"striker_{mid}", f"nonstriker_{mid}"]:
+                            if k in st.session_state:
+                                del st.session_state[k]
+                    except Exception:
+                        pass
+                    st.success(f"Next bowler set to {next_bowler}. Scoring resumed.")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"Failed to set next bowler: {e}")
 
     # Quick actions
     left, right = st.columns([2, 1])
