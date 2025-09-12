@@ -881,7 +881,7 @@ if menu == "Match Setup":
 
 import streamlit as st
 
-st.markdown(\"\"\"
+st.markdown("""
 <style>
 /* Container */
 .scorebox-root { display:flex; justify-content:center; padding:12px 0; }
@@ -911,27 +911,27 @@ st.markdown(\"\"\"
 .nav-item { font-size:13px; color:#111827; text-align:center; }
 .nav-active { background:#8f26ff; color:#fff; padding:6px 12px; border-radius:8px; box-shadow:0 6px 18px rgba(143,38,255,0.14); }
 </style>
-\"\"\", unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # root container (centered)
-st.markdown('<div class=\"scorebox-root\">', unsafe_allow_html=True)
-st.markdown('<div class=\"scorebox-card\">', unsafe_allow_html=True)
+st.markdown('<div class="scorebox-root">', unsafe_allow_html=True)
+st.markdown('<div class="scorebox-card">', unsafe_allow_html=True)
 
 # Header (title & close)
-st.markdown('<div class=\"scorebox-header\">', unsafe_allow_html=True)
-st.markdown(f'<div class=\"scorebox-title\">SCOREBOX</div>', unsafe_allow_html=True)
-st.markdown('<div style=\"font-weight:700;color:#c53030;cursor:pointer;padding:2px 8px;border-radius:6px;background:#fff\">✖</div>', unsafe_allow_html=True)
+st.markdown('<div class="scorebox-header">', unsafe_allow_html=True)
+st.markdown(f'<div class="scorebox-title">SCOREBOX</div>', unsafe_allow_html=True)
+st.markdown('<div style="font-weight:700;color:#c53030;cursor:pointer;padding:2px 8px;border-radius:6px;background:#fff">✖</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Score display area
-st.markdown('<div class=\"score-area\">', unsafe_allow_html=True)
+st.markdown('<div class="score-area">', unsafe_allow_html=True)
 runs = sc.get('runs', 0) if isinstance(sc, dict) else 0
 wkts = sc.get('wkts', 0) if isinstance(sc, dict) else 0
 balls = sc.get('balls', 0) if isinstance(sc, dict) else 0
-overs_display = format_over_ball(balls) if 'format_over_ball' in globals() else f\"{balls//6}.{balls%6}\"
+overs_display = format_over_ball(balls) if 'format_over_ball' in globals() else f"{balls//6}.{balls%6}"
 opp_runs = opp_sc.get('runs', 0) if isinstance(opp_sc, dict) else 0
-st.markdown(f'<div style=\"display:flex;flex-direction:column;gap:8px\">', unsafe_allow_html=True)
-st.markdown(f'<div class=\"score-row\"><div><span class=\"score-big\">{runs}</span><span style=\"font-size:28px;margin-left:10px\">/{wkts}</span></div><div style=\"text-align:right\"><div class=\"score-small\">{overs_display} ({state.get(\"overs_limit\",\"-\")})</div><div style=\"font-size:13px;margin-top:6px;color:#0b8a4a\">{state.get(\"title\",\"Match\")}</div></div></div>', unsafe_allow_html=True)
+st.markdown(f'<div style="display:flex;flex-direction:column;gap:8px">', unsafe_allow_html=True)
+st.markdown(f'<div class="score-row"><div><span class="score-big">{runs}</span><span style="font-size:28px;margin-left:10px">/{wkts}</span></div><div style="text-align:right"><div class="score-small">{overs_display} ({state.get("overs_limit","-")})</div><div style="font-size:13px;margin-top:6px;color:#0b8a4a">{state.get("title","Match")}</div></div></div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
 # If innings 2 - show target/required line
@@ -944,13 +944,13 @@ if state.get('status') == 'INNINGS2':
         target = opp_runs + 1
     runs_needed = max(0, target - runs)
     balls_left = max(0, int(state.get('overs_limit',0))*6 - balls) if int(state.get('overs_limit',0))>0 else None
-    req_text = f\"{runs_needed} from {balls_left} balls\" if balls_left is not None else f\"{runs_needed} needed\"
-    st.markdown(f'<div style=\"margin-top:10px;background:#fff7d6;color:#5a4b00;padding:8px 12px;border-radius:8px;font-weight:700\">Target {target} • {req_text}</div>', unsafe_allow_html=True)
+    req_text = f"{runs_needed} from {balls_left} balls" if balls_left is not None else f"{runs_needed} needed"
+    st.markdown(f'<div style="margin-top:10px;background:#fff7d6;color:#5a4b00;padding:8px 12px;border-radius:8px;font-weight:700">Target {target} • {req_text}</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)  # close score-area
 
 # Buttons grid
-st.markdown('<div class=\"btn-grid\">', unsafe_allow_html=True)
+st.markdown('<div class="btn-grid">', unsafe_allow_html=True)
 
 def safe_record(outcome, extras=None, wicket=None):
     try:
@@ -964,7 +964,7 @@ def safe_record(outcome, extras=None, wicket=None):
             save_match_state(mid, state)
         st.experimental_rerun()
     except Exception as e:
-        st.error(f\"Recording failed: {e}\")
+        st.error(f"Recording failed: {e}")
 
 # Row 1
 if st.button('1', key=f'sbtn_1_{mid}'): safe_record('1')
@@ -984,26 +984,26 @@ if st.button('Wicket', key=f'sbtn_wk_{mid}'): safe_record('W', wicket={'type':'o
 st.markdown('</div>', unsafe_allow_html=True)  # close btn-grid
 
 # Info and commentary preview
-st.markdown('<div class=\"info\">', unsafe_allow_html=True)
-st.markdown('<div style=\"font-weight:700;margin-bottom:6px\">Last Balls</div>', unsafe_allow_html=True)
+st.markdown('<div class="info">', unsafe_allow_html=True)
+st.markdown('<div style="font-weight:700;margin-bottom:6px">Last Balls</div>', unsafe_allow_html=True)
 last12 = state.get('balls_log', [])[-8:][::-1]
 if not last12:
-    st.markdown('<div style=\"color:#6b7280\">No balls recorded yet.</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#6b7280">No balls recorded yet.</div>', unsafe_allow_html=True)
 else:
-    lb_html = '<div style=\"display:flex;flex-direction:column;gap:6px\">'
+    lb_html = '<div style="display:flex;flex-direction:column;gap:6px">'
     for b in last12:
         outcome = b.get('outcome', b.get('run','-'))
         striker = b.get('striker','-')
         bowler = b.get('bowler','-')
-        lb_html += f'<div style=\"font-family:monospace;font-size:13px;color:#111\">{outcome} • {striker} v {bowler}</div>'
+        lb_html += f'<div style="font-family:monospace;font-size:13px;color:#111">{outcome} • {striker} v {bowler}</div>'
     lb_html += '</div>'
     st.markdown(lb_html, unsafe_allow_html=True)
 
-st.markdown('<div style=\"height:10px\"></div>', unsafe_allow_html=True)
-st.markdown('<div style=\"font-weight:700;margin-bottom:6px\">Commentary</div>', unsafe_allow_html=True)
+st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
+st.markdown('<div style="font-weight:700;margin-bottom:6px">Commentary</div>', unsafe_allow_html=True)
 comms = state.get('commentary', [])[-6:][::-1]
 if not comms:
-    st.markdown('<div style=\"color:#6b7280\">No commentary yet.</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color:#6b7280">No commentary yet.</div>', unsafe_allow_html=True)
 else:
     for c in comms:
         st.markdown(f'- {c}', unsafe_allow_html=True)
@@ -1011,16 +1011,17 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)  # close info
 
 # Footer nav (visual only)
-st.markdown('<div class=\"footer-nav\">', unsafe_allow_html=True)
-st.markdown('<div class=\"nav-item nav-active\">Match</div>', unsafe_allow_html=True)
-st.markdown('<div class=\"nav-item\">Timeline</div>', unsafe_allow_html=True)
-st.markdown('<div class=\"nav-item\">Scorecard</div>', unsafe_allow_html=True)
-st.markdown('<div class=\"nav-item\">Help</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer-nav">', unsafe_allow_html=True)
+st.markdown('<div class="nav-item nav-active">Match</div>', unsafe_allow_html=True)
+st.markdown('<div class="nav-item">Timeline</div>', unsafe_allow_html=True)
+st.markdown('<div class="nav-item">Scorecard</div>', unsafe_allow_html=True)
+st.markdown('<div class="nav-item">Help</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)  # footer-nav
 
 st.markdown('</div>', unsafe_allow_html=True)  # scorebox-card
 st.markdown('</div>', unsafe_allow_html=True)  # root
-# ---------- REPLACE END ----------        st.experimental_rerun()
+# ---------- REPLACE END ----------
+
 
     # End over / next bowler
     cur_balls = state.get('score', {}).get(bat, {}).get('balls', 0)
