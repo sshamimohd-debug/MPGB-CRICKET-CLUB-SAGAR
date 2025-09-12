@@ -880,6 +880,64 @@ if menu == "Match Setup":
 # If they are named differently in your file, adapt accordingly.
 
 import streamlit as st
+# Ensure required local variables exist for this UI block.
+# This makes the block robust if called from different parts of the app.
+try:
+    # if 'state' and 'mid' are already defined in outer scope (typical), use them
+    _mid = locals().get('mid', globals().get('mid', None))
+    _state = locals().get('state', globals().get('state', None))
+
+    # fallback: if we have a matches index and only one active match, try to pick it
+    if not _state:
+        try:
+            matches_tmp = load_matches_index()
+            if matches_tmp:
+                # pick the most recent match key if mid not present
+                if not _mid:
+                    _mid = sorted(matches_tmp.keys(), reverse=True)[0]
+                _state = load_match_state(_mid)
+        except Exception:
+            _state = None
+
+    # final fallback: empty state
+    if not _state:
+        _state = {
+            "bat_team": "Team A",
+            "overs_limit": 0,
+            "title": "Match",
+            "teams": {"Team A": [], "Team B": []},
+            "score": {"Team A": {"runs": 0, "wkts": 0, "balls": 0}, "Team B": {"runs": 0, "wkts": 0, "balls": 0}},
+            "batting": {"striker": "", "non_striker": "", "order": [], "next_index": 0},
+            "bowling": {"current_bowler": "", "last_over_bowler": "", "over_needs_change": False},
+            "balls_log": [],
+            "commentary": []
+        }
+
+    # Expose names expected by the UI
+    mid = _mid or "UNKNOWN_MATCH"
+    state = _state
+
+    # batting team & scores
+    bat = state.get("bat_team", "Team A")
+    sc = state.get("score", {}).get(bat, {"runs": 0, "wkts": 0, "balls": 0})
+    other = "Team A" if bat == "Team B" else "Team B"
+    opp_sc = state.get("score", {}).get(other, {"runs": 0, "wkts": 0, "balls": 0})
+
+    # other helpful defaults used later in the block
+    try:
+        other_team_players = state.get("teams", {}).get(other, []) or []
+    except Exception:
+        other_team_players = []
+
+except Exception:
+    # absolute fallback so UI doesn't crash on undefined names
+    mid = "UNKNOWN_MATCH"
+    state = {}
+    bat = "Team A"
+    sc = {"runs": 0, "wkts": 0, "balls": 0}
+    other = "Team B"
+    opp_sc = {"runs": 0, "wkts": 0, "balls": 0}
+    other_team_players = []
 
 st.markdown("""
 <style>
